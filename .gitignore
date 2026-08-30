@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Env / secrets
+.env
+.env.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Logs / temp
+*.log
+/tmp/
+*.tmp
+
+# Data (live feed cache, history, etc)
+data/trade_history.json
+data/*.json
+
+# Node (if any)
+node_modules/
+
+# Claude
+.claude/
