@@ -1,4 +1,4 @@
-/* SG Max-Temp dashboard — polls the FastAPI backend and renders the result. */
+/* Max-Temp dashboard — polls the FastAPI backend and renders the result. */
 
 const POLL_INTERVAL_FULL = 30;  // seconds: full weather pipeline (slower, heavier)
 const POLL_INTERVAL_PRICES = 0.1; // seconds: Polymarket prices only (fast, 10 req/s)
