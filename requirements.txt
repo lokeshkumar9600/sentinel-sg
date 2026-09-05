@@ -1,5 +1,6 @@
 pandas
 numpy
+scipy
 requests
 beautifulsoup4
 lxml
@@ -8,3 +9,5 @@ uvicorn
 lightgbm
 scikit-learn
 pyarrow
+websocket-client
+python-dotenv
