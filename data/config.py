@@ -48,3 +48,4 @@ STORM_W_FORECAST = 0.40    # official NEA two-hour forecast says thundery for Ch
 STORM_W_METAR_TEXT = 0.25  # WSSS METAR wxString reports thunder/rain at the airport itself
 STORM_W_LIGHTNING = 0.20   # live strike count across the island
 STORM_W_RAIN = 0.15        # fraction of NEA stations reporting rain right now
+STORM_W_RAIN_DIST = 0.15   # heavy rain proximity to Changi (suppresses peak before it arrives)

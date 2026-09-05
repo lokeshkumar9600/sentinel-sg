@@ -191,7 +191,12 @@ def extract_singapore_feature_vector(raw_data: dict, metar_history: list) -> dic
 
     rain_readings = raw_data.get("rainfall", {}).get("data", {}).get("readings", [])
     if rain_readings:
-        values = [r.get("value", 0) for r in rain_readings[0].get("data", [])]
+        rain_data = rain_readings[0].get("data", [])
+        stations_info = raw_data.get("rainfall", {}).get("data", {}).get("stations", [])
+        station_coords = {s["id"]: (s["location"]["latitude"], s["location"]["longitude"])
+                          for s in stations_info}
+
+        values = [r.get("value", 0) for r in rain_data]
         stations_total = len(values)
         stations_with_rain = sum(1 for v in values if v and v > 0)
         features["rain_station_ratio"] = (stations_with_rain / stations_total) if stations_total else 0.0
@@ -199,9 +204,22 @@ def extract_singapore_feature_vector(raw_data: dict, metar_history: list) -> dic
         features["rain_hotspot_ratio"] = (
             sum(1 for v in values if _f(v, 0.0) >= _RAIN_HOTSPOT_MM) / stations_total
         ) if stations_total else 0.0
+
+        # NEW: distance from Changi to nearest heavy-rain station
+        min_dist = None
+        for r in rain_data:
+            st_id = r.get("stationId")
+            val = _f(r.get("value"), 0.0)
+            if st_id in station_coords and val >= _RAIN_HOTSPOT_MM:
+                lat, lon = station_coords[st_id]
+                d = haversine(CHANGI_LAT, CHANGI_LON, lat, lon)
+                if min_dist is None or d < min_dist:
+                    min_dist = d
+        features["rain_dist_to_changi_km"] = min_dist
     else:
         features["rain_station_ratio"] = 0.0
         features["rain_hotspot_ratio"] = 0.0
+        features["rain_dist_to_changi_km"] = None
 
     # 5. NEW: official NEA two-hour forecast - does it call thundery/rainy weather
     # for the Changi area right now? Strong max-temp suppressor, previously unused.

@@ -1,152 +1,219 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Max-Temp | Prediction Terminal</title>
+  <title>Sentinel Prediction Engine</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <div class="app">
-    <!-- Header -->
+    <!-- Header / Navbar -->
     <header class="header">
       <div class="header__brand">
         <div class="header__logo">
-          <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-            <circle cx="14" cy="14" r="12" stroke="url(#grad)" stroke-width="2"/>
-            <path d="M14 6 L14 14 L20 18" stroke="url(#grad)" stroke-width="2" stroke-linecap="round"/>
-            <defs><linearGradient id="grad" x1="0" y1="0" x2="28" y2="28"><stop offset="0%" stop-color="#00d4aa"/><stop offset="100%" stop-color="#0891b2"/></linearGradient></defs>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
           </svg>
         </div>
-        <div class="header__titles">
-          <h1>Max-Temp</h1>
-          <span class="header__subtitle">Prediction Terminal</span>
-        </div>
+        <h1 class="header__title">Sentinel Prediction Engine</h1>
+        <span class="header__badge" id="system-status">INITIALIZING</span>
       </div>
-
-      <div class="header__status">
-        <div class="status-pill" id="conn-pill">
-          <span class="status-pill__dot"></span>
-          <span class="status-pill__text">Connecting...</span>
-        </div>
+      <div class="header__right">
         <div class="header__clock" id="clock">--:--:-- SGT</div>
+        <button class="btn btn--ghost" id="refresh-btn" aria-label="Force refresh">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M23 4v6h-6M1 20v-6h6"/>
+            <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+          </svg>
+        </button>
       </div>
     </header>
 
-    <!-- Main Grid -->
     <main class="main">
-      <!-- Hero: Prediction -->
+      <!-- Hero: Prediction + Context -->
       <section class="hero">
-        <div class="hero__main">
+        <div class="hero__left">
           <div class="hero__label">Predicted Max Temp</div>
           <div class="hero__value" id="pred-value">--°C</div>
-          <div class="hero__stderr" id="pred-stderr">±--°C</div>
+          <div class="hero__meta" id="pred-meta">±--°C · hour -- SGT</div>
+          <div class="hero__chart" id="pred-chart"></div>
         </div>
-        <div class="hero__chart" id="pred-chart"></div>
+        <div class="hero__right">
+          <div class="hero__context" id="context-panel">
+            <div class="context__title">Decision Context</div>
+            <div class="context__list" id="context-list">—</div>
+          </div>
+          <div class="hero__feed" id="feed-panel">
+            <div class="feed__title">Live Feed</div>
+            <div class="feed__status" id="feed-status">
+              <span class="feed__dot"></span>
+              <span>Connecting...</span>
+            </div>
+            <div class="feed__stats" id="feed-stats">
+              <span id="tick-count">0 ticks</span>
+              <span id="last-move">no moves</span>
+            </div>
+          </div>
+        </div>
       </section>
 
-      <!-- Status Bar -->
-      <div class="status-bar">
-        <div class="status-bar__item">
-          <span class="status-bar__label">Updated</span>
-          <span class="status-bar__value" id="last-updated">--</span>
-        </div>
-        <div class="status-bar__item">
-          <span class="status-bar__label">Next Poll</span>
-          <span class="status-bar__value"><span id="countdown">--</span>s</span>
-        </div>
-        <div class="status-bar__item">
-          <span class="status-bar__label">Event</span>
-          <span class="status-bar__value" id="event-note">--</span>
-        </div>
-        <div class="status-bar__item status-bar__item--feed" id="feed-status">
-          <span class="status-bar__dot"></span>
-          <span>price feed --</span>
-        </div>
+      <!-- Data Flow Visualization -->
+      <section class="flow-panel" id="flow-panel">
+        <div class="flow__title">Data Flow</div>
+        <div class="flow__svg" id="flow-svg"></div>
+      </section>
+
+      <!-- Live WSSS + Decision Tree side by side -->
+      <div class="dual-panel">
+        <section class="panel wsss-panel" id="wsss-panel">
+          <div class="panel__header">
+            <h3 class="panel__title">WSSS Live</h3>
+            <span class="panel__time" id="wsss-time">--</span>
+          </div>
+          <div class="wsss__grid">
+            <div class="wsss__main">
+              <div class="wsss__temp" id="wsss-temp">--°C</div>
+              <div class="wsss__flight" id="wsss-flight">--</div>
+              <div class="wsss__wx" id="wsss-wx">--</div>
+            </div>
+            <div class="wsss__stats">
+              <div class="stat">
+                <span class="stat__label">Dewpoint</span>
+                <span class="stat__value" id="wsss-dewp">--°C</span>
+              </div>
+              <div class="stat">
+                <span class="stat__label">RH</span>
+                <span class="stat__value" id="wsss-rh">--%</span>
+              </div>
+              <div class="stat">
+                <span class="stat__label">Wind</span>
+                <span class="stat__value" id="wsss-wind">-- kt</span>
+              </div>
+              <div class="stat">
+                <span class="stat__label">Gust</span>
+                <span class="stat__value" id="wsss-gust">-- kt</span>
+              </div>
+              <div class="stat">
+                <span class="stat__label">Pressure</span>
+                <span class="stat__value" id="wsss-pres">-- hPa</span>
+              </div>
+              <div class="stat">
+                <span class="stat__label">Trend 3h</span>
+                <span class="stat__value" id="wsss-trend">-- hPa</span>
+              </div>
+              <div class="stat">
+                <span class="stat__label">Visibility</span>
+                <span class="stat__value" id="wsss-vis">-- km</span>
+              </div>
+              <div class="stat">
+                <span class="stat__label">Cloud</span>
+                <span class="stat__value" id="wsss-cloud">-- oktas</span>
+              </div>
+              <div class="stat">
+                <span class="stat__label">Ceiling</span>
+                <span class="stat__value" id="wsss-ceil">-- ft</span>
+              </div>
+            </div>
+          </div>
+          <div class="wsss__sparkline" id="wsss-sparkline"></div>
+        </section>
+
+        <section class="panel decision-panel" id="decision-panel">
+          <div class="panel__header">
+            <h3 class="panel__title">Decision Process</h3>
+          </div>
+          <div class="decision__flow" id="decision-flow">
+            <!-- Animated decision nodes will render here -->
+          </div>
+        </section>
       </div>
 
-      <!-- Two Column Layout -->
-      <div class="grid">
-        <!-- Left: Conditions -->
-        <aside class="card conditions-card">
-          <h2 class="card__title">
-            <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 2v2m0 10v2M2 9h2m10 0h2M4.93 4.93l1.41 1.41m7.32 7.32l1.41 1.41M4.93 19.07l1.41-1.41m7.32-7.32l1.41-1.41"/></svg>
-            Conditions
-          </h2>
-          <div class="conditions" id="conditions"></div>
-        </aside>
-
-        <!-- Right: Trades -->
-        <div class="trades-section">
-          <!-- Open Positions -->
-          <section class="card positions-card">
-            <h2 class="card__title">
-              <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 12h4l3-9 4 18 3-9h4"/></svg>
-              Open Positions
-            </h2>
-            <div class="tablewrap">
-              <table class="table" id="positions-table">
-                <thead>
-                  <tr>
-                    <th>Bracket</th>
-                    <th>Side</th>
-                    <th class="t-right">Entry</th>
-                    <th class="t-right">Now</th>
-                    <th class="t-right">P&L</th>
-                    <th>Action</th>
-                  </tr>
-                </thead>
-                <tbody id="positions-body"><tr><td colspan="6" class="emptystate">No open positions</td></tr></tbody>
-              </table>
-            </div>
-          </section>
-
-          <!-- Brackets -->
-          <section class="card brackets-card">
-            <h2 class="card__title">
-              <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/></svg>
-              Brackets
-            </h2>
-            <div class="tablewrap">
-              <table class="table">
-                <thead>
-                  <tr>
-                    <th>Bracket</th>
-                    <th class="t-right">Model</th>
-                    <th class="t-right" title="Best ask — what you pay to buy YES">Yes ↗</th>
-                    <th class="t-right" title="NegRisk: what you pay to short">No ↗</th>
-                    <th>Action</th>
-                    <th class="t-right">Edge</th>
-                    <th class="t-right">Stake</th>
-                  </tr>
-                </thead>
-                <tbody id="brackets-body"><tr><td colspan="7" class="emptystate">Loading...</td></tr></tbody>
-              </table>
-            </div>
-            <div class="brackets-foot" id="brackets-foot"></div>
-          </section>
+      <!-- Weather Map -->
+      <section class="panel map-panel" id="map-panel">
+        <div class="panel__header">
+          <h3 class="panel__title">Live Weather Map</h3>
+          <div class="map__controls">
+            <div class="metric-toggle" id="metric-toggle"></div>
+            <div class="map__legend" id="map-legend"></div>
+          </div>
         </div>
+        <div class="map__container" id="map"></div>
+        <div class="map__timestamp" id="map-timestamp">—</div>
+      </section>
+
+      <!-- Trading Terminal -->
+      <div class="terminal-grid">
+        <section class="panel positions-panel" id="positions-panel">
+          <div class="panel__header">
+            <h3 class="panel__title">Advisory Positions</h3>
+          </div>
+          <div class="tablewrap">
+            <table class="table" id="positions-table">
+              <thead>
+                <tr>
+                  <th>Bracket</th>
+                  <th>Side</th>
+                  <th class="t-right">Entry</th>
+                  <th class="t-right">Now</th>
+                  <th class="t-right">P&L</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="positions-body"><tr><td colspan="6" class="emptystate">No open positions</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel brackets-panel" id="brackets-panel">
+          <div class="panel__header">
+            <h3 class="panel__title">Bracket Evaluation</h3>
+            <span class="panel__time" id="event-date">—</span>
+          </div>
+          <div class="tablewrap">
+            <table class="table" id="brackets-table">
+              <thead>
+                <tr>
+                  <th>Bracket</th>
+                  <th class="t-right">Model %</th>
+                  <th class="t-right">Yes Ask</th>
+                  <th class="t-right">No Ask</th>
+                  <th>Action</th>
+                  <th class="t-right">Edge</th>
+                  <th class="t-right">Stake</th>
+                </tr>
+              </thead>
+              <tbody id="brackets-body"><tr><td colspan="7" class="emptystate">Loading...</td></tr></tbody>
+            </table>
+          </div>
+          <div class="brackets__foot" id="brackets-foot"></div>
+        </section>
       </div>
     </main>
 
-    <!-- Footer -->
     <footer class="footer">
-      <button class="btn btn--secondary" id="refresh-btn">
-        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4v5h5M20 20v-5h-5M4 16a8 8 0 0114.32-4.9M20 8a8 8 0 01-14.32 4.9"/></svg>
-        Refresh
-      </button>
-      <div class="footer__links">
-        <a href="https://polymarket.com" target="_blank">Polymarket</a>
+      <div class="footer__left">
+        <span class="footer__version" id="version">v1.0</span>
+      </div>
+      <div class="footer__right">
+        <a href="https://polymarket.com" target="_blank" rel="noopener">Polymarket</a>
         <span class="divider">·</span>
-        <a href="https://weather.gov.sg" target="_blank">NEA</a>
+        <a href="https://data.gov.sg" target="_blank" rel="noopener">data.gov.sg</a>
+        <span class="divider">·</span>
+        <a href="https://aviationweather.gov" target="_blank" rel="noopener">Aviation Weather</a>
       </div>
     </footer>
   </div>
 
-  <div class="errorbar" id="errorbar" hidden></div>
+  <div class="toast" id="toast" hidden></div>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
   <script src="app.js"></script>
 </body>
 </html>

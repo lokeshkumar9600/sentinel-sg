@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 # not in a "data" package - the original imports would raise ModuleNotFoundError.
 from data.feature_engine import extract_singapore_feature_vector
 from data.ingestion import fetch_all_data_gov, fetch_wsss_metar_history
-from data.config import STORM_W_FORECAST, STORM_W_METAR_TEXT, STORM_W_LIGHTNING, STORM_W_RAIN
+from data.config import STORM_W_FORECAST, STORM_W_METAR_TEXT, STORM_W_LIGHTNING, STORM_W_RAIN, STORM_W_RAIN_DIST
 from execution.polymarket import fetch_event_raw, parse_markets_from_event, get_live_clob_price, parse_temperature_bounds
 from execution.kelly_sizer import calculate_bracket_probability, compute_kelly_trade, size_portfolio
 
@@ -55,7 +55,8 @@ def _convection_storm_score(features: dict) -> float:
     suppress the afternoon peak. Combines the official NEA two-hour forecast for
     the Changi area, the WSSS METAR wxString, live island lightning, live rain
     coverage, plus moisture/instability adjuvants (low cloud, falling pressure,
-    near-saturated dew-point depression). Weights live in data.config.
+    near-saturated dew-point depression, and rain proximity to Changi).
+    Weights live in data.config.
     """
     score = 0.0
     if features.get("changi_forecast_storm"):
@@ -66,6 +67,11 @@ def _convection_storm_score(features: dict) -> float:
     score += STORM_W_LIGHTNING * min(1.0, lightning / 10.0)
     rain = features.get("rain_station_ratio", 0.0) or 0.0
     score += STORM_W_RAIN * min(1.0, rain / 0.5)
+
+    # NEW: spatial proximity adjuvance — heavy rain approaching the airport
+    d = features.get("rain_dist_to_changi_km")
+    if d is not None:
+        score += STORM_W_RAIN_DIST * max(0.0, 1.0 - d / 10.0)  # within 10km adds suppression
 
     # Adjuvants: conditions that make convection likely even without an explicit flag.
     dpd = features.get("wsss_dpd")
@@ -79,6 +85,40 @@ def _convection_storm_score(features: dict) -> float:
         score += 0.05  # low cloud = active convective development
 
     return min(1.0, score)
+
+
+def _build_prediction_context(features: dict, storm: float, mu: float, sigma: float) -> list[str]:
+    """Build a short human-readable list of why the prediction is what it is."""
+    ctx = []
+    # Storm components
+    if features.get("changi_forecast_storm"):
+        ctx.append("NEA 2hr: thundery near airport")
+    if features.get("wsss_storm_txt"):
+        ctx.append("WSSS METAR: thunder/rain at airport")
+    lightning = features.get("lightning_strike_count", 0) or 0
+    if lightning:
+        ctx.append(f"{lightning} lightning strike{'s' if lightning != 1 else ''}")
+    rain = features.get("rain_station_ratio", 0.0) or 0.0
+    if rain:
+        ctx.append(f"{rain*100:.0f}% stations raining")
+    d = features.get("rain_dist_to_changi_km")
+    if d is not None and d < 10:
+        ctx.append(f"rain {d:.1f}km from airport")
+    # Heat spread
+    spread = features.get("spatial_temp_spread")
+    if spread is not None:
+        ctx.append(f"island spread {spread:.1f}°C")
+    # Storm score summary
+    if storm > 0.3:
+        ctx.append(f"storm score {storm:.2f} (suppressing peak)")
+    elif storm > 0.1:
+        ctx.append(f"storm score {storm:.2f} (mild suppression)")
+    # Diurnal
+    hr = features.get("hour_of_day")
+    if hr is not None:
+        df = _diurnal_heating_fraction(hr)
+        ctx.append(f"diurnal {df*100:.0f}% done")
+    return ctx
 
 
 def predict_daily_max_temp(features: dict) -> tuple[float, float]:
