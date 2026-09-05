@@ -221,7 +221,10 @@ def _get_dashboard(fresh: bool = False) -> dict:
     try:
         event_date_str, markets = find_live_event()
         if markets:
-            result = evaluate_polymarket_brackets(event_date_str, mu, sigma, markets)
+            result = evaluate_polymarket_brackets(
+                event_date_str, mu, sigma, markets,
+                todays_max_so_far=features.get("wsss_todays_max_so_far"),
+            )
             trades = result["trades"]
             # When-to-trade: turn a promising bracket into an advisory book entry
             # (and fold any already-open position's manage signals in).
@@ -534,7 +537,10 @@ def simulate(payload: dict = Body(...)):
     trades = []
     if markets:
         try:
-            trades = evaluate_polymarket_brackets(event_date_str, mu, sigma, markets)["trades"]
+            trades = evaluate_polymarket_brackets(
+                event_date_str, mu, sigma, markets,
+                todays_max_so_far=features.get("wsss_todays_max_so_far"),
+            )["trades"]
         except Exception as e:  # noqa: BLE001
             error = str(e)
 

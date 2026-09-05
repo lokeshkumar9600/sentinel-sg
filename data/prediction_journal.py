@@ -21,13 +21,31 @@ JOURNAL_FILE = Path("data/predictions.json")
 _lock = threading.Lock()
 
 
+def _canonical_date(date_str: str) -> str:
+    """Normalize a journal date to the canonical zero-padded %B-%d-%Y form
+    (e.g. "September-5-2026" -> "September-05-2026").  Early journal entries
+    were written with a non-padded day; without this the same day appears twice
+    and inflates days_tracked / splits one day's stats across two rows."""
+    try:
+        return datetime.strptime(date_str, "%B-%d-%Y").strftime("%B-%d-%Y")
+    except ValueError:
+        return date_str
+
+
 def _load() -> list:
     if JOURNAL_FILE.exists():
         try:
             with open(JOURNAL_FILE, "r") as f:
-                return json.load(f)
+                raw = json.load(f)
         except (json.JSONDecodeError, IOError):
             return []
+        # Self-heal: canonicalize dates and merge any duplicates (keep newest).
+        merged: dict = {}
+        for e in sorted(raw, key=lambda x: x.get("recorded_at_sgt", "")):
+            canon = _canonical_date(e.get("date_str", ""))
+            e["date_str"] = canon
+            merged[canon] = e  # sorted ascending -> last write wins
+        return list(merged.values())
     return []
 
 

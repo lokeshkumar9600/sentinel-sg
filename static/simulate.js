@@ -17,10 +17,10 @@ const els = {
 // Range controls -> <span> value readouts
 const CTLS = [
   ['hour', 'ctl-hour', 'ctl-hour-val', v => `${v}:00 SGT`],
-  ['temp', 'ctl-temp', 'ctl-temp-val', v => `${Number(v).toFixed(1)} °C`],
+  ['temp', 'ctl-temp', 'ctl-temp-val', v => `${Number(v).toFixed(2)} °C`],
   ['rh', 'ctl-rh', 'ctl-rh-val', v => `${v} %`],
   ['wind', 'ctl-wind', 'ctl-wind-val', v => `${v} kt`],
-  ['dewp', 'ctl-dewp', 'ctl-dewp-val', v => `${Number(v).toFixed(1)} °C`],
+  ['dewp', 'ctl-dewp', 'ctl-dewp-val', v => `${Number(v).toFixed(2)} °C`],
   ['cloud', 'ctl-cloud', 'ctl-cloud-val', v => `${v}/8`],
 ];
 CTLS.forEach(([key, inputId, valId, fmt]) => {
@@ -81,7 +81,7 @@ function renderChart(prediction) {
       <line x1="${xs(mu).toFixed(1)}" y1="${padT}" x2="${xs(mu).toFixed(1)}" y2="${H - padB - 2}"
         stroke="var(--accent)" stroke-width="1" stroke-dasharray="2 3"/>
       <text x="${xs(mu).toFixed(1)}" y="${padT - 2}" fill="var(--primary-ink)" font-size="9"
-        text-anchor="middle" font-family="var(--font-mono)">${mu.toFixed(1)}°C</text>
+        text-anchor="middle" font-family="var(--font-mono)">${mu.toFixed(2)}°C</text>
     </svg>`;
 }
 
@@ -99,7 +99,7 @@ function renderMc(mc, trades) {
     const h = Math.max(3, Math.round((b.count / maxC) * 100));
     return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;min-width:0">
       <div style="width:70%;height:${h}%;background:var(--accent);opacity:0.85;border-radius:2px 2px 0 0"></div>
-      <span style="font-size:7px;color:var(--muted-ink);writing-mode:vertical-rl;transform:rotate(180deg);overflow:hidden;max-height:20px;white-space:nowrap">${b.lo.toFixed(1)}</span>
+      <span style="font-size:7px;color:var(--muted-ink);writing-mode:vertical-rl;transform:rotate(180deg);overflow:hidden;max-height:20px;white-space:nowrap">${b.lo.toFixed(2)}</span>
     </div>`;
   }).join('');
 
@@ -109,7 +109,7 @@ function renderMc(mc, trades) {
     return `<div style="display:flex;justify-content:space-between;gap:10px;padding:4px 0;border-bottom:1px solid var(--hairline)">
       <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(t.bracket || '')}</span>
       <span style="flex:0 0 96px;text-align:right">win <b>${(t.mc_win_rate * 100).toFixed(0)}%</b></span>
-      <span style="flex:0 0 110px;text-align:right;color:var(--secondary-ink)">${t.mc_low != null ? '[' + t.mc_low.toFixed(1) + '–' + t.mc_high.toFixed(1) + ']' : ''}</span>
+      <span style="flex:0 0 110px;text-align:right;color:var(--secondary-ink)">${t.mc_low != null ? '[' + t.mc_low.toFixed(2) + '–' + t.mc_high.toFixed(2) + ']' : ''}</span>
       <span style="flex:0 0 88px;text-align:right" class="${cls}">E[PnL] ${exp != null ? (exp >= 0 ? '+' : '') + '$' + exp.toFixed(2) : '—'}</span>
     </div>`;
   }).join('') || '<div class="emptystate">No tradable brackets.</div>';
@@ -118,7 +118,7 @@ function renderMc(mc, trades) {
     <div style="color:var(--secondary-ink);font-size:0.76rem;display:flex;flex-wrap:wrap;gap:14px;margin-bottom:10px">
       <span>mean <b style="color:var(--primary-ink)">${mc.mean_c.toFixed(2)}°C</b></span>
       <span>σ <b style="color:var(--primary-ink)">${mc.std_c.toFixed(2)}</b></span>
-      <span>p10–p90 <b style="color:var(--primary-ink)">${mc.p10.toFixed(1)} – ${mc.p90.toFixed(1)}°C</b></span>
+      <span>p10–p90 <b style="color:var(--primary-ink)">${mc.p10.toFixed(2)} – ${mc.p90.toFixed(2)}°C</b></span>
     </div>
     <div style="height:56px;display:flex;gap:2px;align-items:stretch;margin-bottom:6px">${bars}</div>
     <div style="margin-top:8px">${mcRows}</div>`;
@@ -142,15 +142,15 @@ function renderBrackets(data) {
     return;
   }
   els.bracketsBody.innerHTML = trades.map(t => {
-    const prob = t.prob != null ? (t.prob * 100).toFixed(1) + '%' : '—';
+    const prob = t.prob != null ? (t.prob * 100).toFixed(2) + '%' : '—';
     const stake = t.stake_usd != null ? '$' + Number(t.stake_usd).toFixed(2) : '—';
     return `<tr>
       <td>${escapeHtml(t.bracket || '')}</td>
       <td class="num">${prob}</td>
-      <td class="num yes">${t.yes_price != null ? '¢' + (t.yes_price * 100).toFixed(1) : '—'}</td>
-      <td class="num no">${t.no_price != null ? '¢' + (t.no_price * 100).toFixed(1) : '—'}</td>
+      <td class="num yes">${t.yes_price != null ? '¢' + (t.yes_price * 100).toFixed(2) : '—'}</td>
+      <td class="num no">${t.no_price != null ? '¢' + (t.no_price * 100).toFixed(2) : '—'}</td>
       <td>${tag(t.action)}</td>
-      <td class="num">${t.edge != null ? (t.edge * 100).toFixed(1) + '%' : '—'}</td>
+      <td class="num">${t.edge != null ? (t.edge * 100).toFixed(2) + '%' : '—'}</td>
       <td class="num">${stake}</td>
     </tr>`;
   }).join('');
@@ -174,7 +174,7 @@ async function runSim() {
     const p = data.prediction || {};
 
     if (p.mean_c != null) {
-      els.mu.textContent = p.mean_c.toFixed(1) + '°C';
+      els.mu.textContent = p.mean_c.toFixed(2) + '°C';
       els.sigma.textContent = `±${p.std_c != null ? p.std_c.toFixed(2) : '·'}°C · storm ${p.storm_score != null ? p.storm_score.toFixed(2) : '·'}`;
     } else {
       els.mu.textContent = '—';

@@ -126,23 +126,23 @@ function renderDataFlow(data) {
   const wsss = {
     id: 'WSSS', x: 170, y: 115, color: '#38bdf8',
     label: 'WSSS METAR', sub: 'aviationweather.gov · temp + 24h',
-    val: f.wsss_current_temp != null ? f.wsss_current_temp.toFixed(1) : null,
+    val: f.wsss_current_temp != null ? f.wsss_current_temp : null,
   };
   const gov = {
     id: 'GOV', x: 170, y: 335, color: '#2dd4bf',
     label: 'data.gov.sg', sub: '12 raintel APIs',
-    val: f.rain_station_ratio != null ? (f.rain_station_ratio * 100).toFixed(0) : null,
+    val: f.rain_station_ratio != null ? (f.rain_station_ratio * 100) : null,
   };
 
   const wChips = [
-    { k: 'TEMP', v: f.wsss_current_temp != null ? f.wsss_current_temp.toFixed(1) + '°' : '·', a: f.wsss_current_temp != null },
-    { k: 'DEWP', v: f.wsss_dewp != null ? f.wsss_dewp.toFixed(1) + '°' : '·', a: f.wsss_dewp != null },
-    { k: 'WIND', v: f.wsss_wspd != null ? f.wsss_wspd.toFixed(0) + 'kt' : '·', a: f.wsss_wspd != null },
+    { k: 'TEMP', v: f.wsss_current_temp != null ? f.wsss_current_temp.toFixed(2) + '°' : '·', a: f.wsss_current_temp != null },
+    { k: 'DEWP', v: f.wsss_dewp != null ? f.wsss_dewp.toFixed(2) + '°' : '·', a: f.wsss_dewp != null },
+    { k: 'WIND', v: f.wsss_wspd != null ? f.wsss_wspd.toFixed(2) + 'kt' : '·', a: f.wsss_wspd != null },
     { k: 'CLOUD', v: f.wsss_total_cloud_oktas != null ? f.wsss_total_cloud_oktas.toFixed(0) + '/8' : '·', a: f.wsss_total_cloud_oktas != null },
   ];
   const gChips = [
-    { k: 'RAIN', v: f.rain_station_ratio != null ? (f.rain_station_ratio * 100).toFixed(0) + '%' : '·', a: f.rain_station_ratio != null },
-    { k: 'UV', v: f.uv_index != null ? f.uv_index.toFixed(1) : '·', a: f.uv_index != null },
+    { k: 'RAIN', v: f.rain_station_ratio != null ? (f.rain_station_ratio * 100).toFixed(2) + '%' : '·', a: f.rain_station_ratio != null },
+    { k: 'UV', v: f.uv_index != null ? f.uv_index.toFixed(2) : '·', a: f.uv_index != null },
     { k: 'LIGHT', v: f.lightning_strike_count != null ? String(f.lightning_strike_count) : '·', a: f.lightning_strike_count != null },
     { k: 'FCST', v: f.changi_forecast_storm ? 'storm' : 'clear', a: !!f.changi_forecast_storm },
   ];
@@ -152,15 +152,15 @@ function renderDataFlow(data) {
       value: nFeat > 0 ? nFeat + ' signals' : '···', sub: 'feature vector',
       on: nFeat > 0 },
     { label: 'MODEL', color: '#3987e5', x: 830,
-      value: pred.mean_c != null ? (pred.mean_c.toFixed(1) + '±' + (pred.std_c != null ? pred.std_c.toFixed(1) : '·')) : '···',
+      value: pred.mean_c != null ? (pred.mean_c.toFixed(2) + '±' + (pred.std_c != null ? pred.std_c.toFixed(2) : '·')) : '···',
       sub: 'max-temp dist', on: pred.mean_c != null },
     { label: 'MARKET', color: '#f59e0b', x: 995,
-      value: top != null ? '±' + (top.edge >= 0 ? '+' : '') + (top.edge * 100).toFixed(1) + '%' : '···',
+      value: top != null ? '±' + (top.edge >= 0 ? '+' : '') + (top.edge * 100).toFixed(2) + '%' : '···',
       sub: top != null ? 'vs live ask' : 'bracket ask',
       on: !!top },
     { label: 'DECISION', color: '#199e70', x: 1135,
       value: top ? (top.action || 'signal') : 'no edge',
-      sub: top ? (top.stake_usd ? '$' + top.stake_usd.toFixed(0) : 'hold/scout') : 'awaiting edge',
+      sub: top ? (top.stake_usd ? '$' + top.stake_usd.toFixed(2) : 'hold/scout') : 'awaiting edge',
       on: !!top },
   ];
 
@@ -178,8 +178,8 @@ function renderDataFlow(data) {
   // --- Data source hubs + their live channels ---
   const hubs = [wsss, gov];
   hubs.forEach(h => {
-    const flash = _flowPrev['hub_' + h.id] !== (h.val != null ? h.val.toFixed(1) : '·');
-    if (flash) _flowPrev['hub_' + h.id] = h.val != null ? h.val.toFixed(1) : '·';
+    const flash = _flowPrev['hub_' + h.id] !== (h.val != null ? h.val.toFixed(2) : '·');
+    if (flash) _flowPrev['hub_' + h.id] = h.val != null ? h.val.toFixed(2) : '·';
     svg += `<g transform="translate(${h.x},${h.y})" class="flow-stage"><g class="${flash ? 'stage-flash' : ''}">
       <circle r="30" fill="${h.color}" opacity="${h.val != null ? 0.05 : 0.015}"/>
       <circle r="30" fill="rgba(10,12,16,0.92)" stroke="${h.color}" stroke-width="1.6"/>
@@ -190,7 +190,7 @@ function renderDataFlow(data) {
       <g transform="translate(0,-9)">${flowIcon(h.id, h.color)}</g>
       <text y="46" text-anchor="middle" fill="var(--secondary-ink)" font-size="9.5" letter-spacing="1.5" font-weight="600">${h.label}</text>
       <text y="60" text-anchor="middle" fill="${h.val != null ? h.color : 'var(--muted-ink)'}" font-size="12" font-weight="600"
-        font-family="JetBrains Mono, monospace">${h.val != null ? h.val.toFixed(1) : '···'}</text>
+        font-family="JetBrains Mono, monospace">${h.val != null ? h.val.toFixed(2) : '···'}</text>
     </g></g>`;
   });
 
@@ -258,12 +258,12 @@ function renderDataFlow(data) {
 // --- Decision Tree ---
 function renderDecisionTree(ctx, features, prediction, trades) {
   const nodes = [
-    { type: 'input', label: 'WSSS Temp', value: features?.wsss_current_temp?.toFixed(1) + '°C' || '—' },
-    { type: 'input', label: 'Dewpoint', value: features?.wsss_dewp?.toFixed(1) + '°C' || '—' },
+    { type: 'input', label: 'WSSS Temp', value: features?.wsss_current_temp?.toFixed(2) + '°C' || '—' },
+    { type: 'input', label: 'Dewpoint', value: features?.wsss_dewp?.toFixed(2) + '°C' || '—' },
     { type: 'input', label: 'Storm', value: features?.changi_forecast_storm ? 'YES' : 'No' },
-    { type: 'process', label: 'Prediction', value: prediction ? `${prediction.mean_c}±${prediction.std_c}°C` : '—' },
-    { type: 'process', label: 'Storm Score', value: features?.rain_dist_to_changi_km != null ? `~${features.rain_dist_to_changi_km.toFixed(1)}km` : '—' },
-    { type: 'output', label: 'Edge', value: trades?.length ? `${(trades[0].edge * 100 || 0).toFixed(1)}%` : '—' },
+    { type: 'process', label: 'Prediction', value: prediction && prediction.mean_c != null ? `${prediction.mean_c.toFixed(2)}±${prediction.std_c != null ? prediction.std_c.toFixed(2) : '·'}°C` : '—' },
+    { type: 'process', label: 'Storm Score', value: features?.rain_dist_to_changi_km != null ? `~${features.rain_dist_to_changi_km.toFixed(2)}km` : '—' },
+    { type: 'output', label: 'Edge', value: trades?.length ? `${(trades[0].edge * 100 || 0).toFixed(2)}%` : '—' },
   ];
 
   const actionNodes = [];
@@ -300,17 +300,17 @@ function renderWsss(wsss) {
 
   const l = wsss.latest;
   els.wsssTime.textContent = l.obs_time_sgt || '—';
-  els.wsssTemp.textContent = (l.temp != null ? l.temp.toFixed(1) + '°C' : '—');
+  els.wsssTemp.textContent = (l.temp != null ? l.temp.toFixed(2) + '°C' : '—');
   els.wsssFlight.textContent = l.flight_category || '—';
   els.wsssFlight.dataset.cat = l.flight_category || '';
   els.wsssWx.textContent = l.wxString || '—';
-  els.wsssDewp.textContent = (l.dewp != null ? l.dewp.toFixed(1) + '°C' : '—');
-  els.wsssRh.textContent = (l.rh != null ? l.rh.toFixed(0) + '%' : '—');
-  els.wsssWind.textContent = (l.wspd != null ? l.wspd.toFixed(0) + ' kt' : '—');
-  els.wsssGust.textContent = (l.gust != null ? l.gust.toFixed(0) + ' kt' : '—');
-  els.wsssPres.textContent = (l.altim != null ? l.altim.toFixed(0) + ' hPa' : '—');
-  els.wsssTrend.textContent = (l.press_trend_3h != null ? (l.press_trend_3h > 0 ? '+' : '') + l.press_trend_3h.toFixed(1) + ' hPa' : '—');
-  els.wsssVis.textContent = (l.visib != null ? l.visib.toFixed(1) + ' km' : '—');
+  els.wsssDewp.textContent = (l.dewp != null ? l.dewp.toFixed(2) + '°C' : '—');
+  els.wsssRh.textContent = (l.rh != null ? l.rh.toFixed(2) + '%' : '—');
+  els.wsssWind.textContent = (l.wspd != null ? l.wspd.toFixed(2) + ' kt' : '—');
+  els.wsssGust.textContent = (l.gust != null ? l.gust.toFixed(2) + ' kt' : '—');
+  els.wsssPres.textContent = (l.altim != null ? l.altim.toFixed(2) + ' hPa' : '—');
+  els.wsssTrend.textContent = (l.press_trend_3h != null ? (l.press_trend_3h > 0 ? '+' : '') + l.press_trend_3h.toFixed(2) + ' hPa' : '—');
+  els.wsssVis.textContent = (l.visib != null ? l.visib.toFixed(2) + ' km' : '—');
   els.wsssCloud.textContent = (l.cloud_oktas != null ? l.cloud_oktas.toFixed(0) + '/8' : '—');
   els.wsssCeil.textContent = (l.low_cloud_ft > 0 ? l.low_cloud_ft.toLocaleString() + ' ft' : '—');
 
@@ -393,7 +393,7 @@ function renderMap(spatial) {
         fillOpacity: 0.8,
         color: '#fff',
         weight: 1
-      }).bindPopup(`<b>${p.name}</b><br/>${p.value.toFixed(1)}°C`).addTo(_mapLayer);
+      }).bindPopup(`<b>${p.name}</b><br/>${p.value.toFixed(2)}°C`).addTo(_mapLayer);
     });
   } else if (metric === 'rainfall' && data.points) {
     const rainVals = data.points.map(p => p.value);
@@ -408,7 +408,7 @@ function renderMap(spatial) {
           fillOpacity: 0.6 + v / (maxR || 1) * 0.4,
           color: '#fff',
           weight: 1
-        }).bindPopup(`<b>${p.name}</b><br/>${v.toFixed(1)} mm`).addTo(_mapLayer);
+        }).bindPopup(`<b>${p.name}</b><br/>${v.toFixed(2)} mm`).addTo(_mapLayer);
       } else {
         // Dry but reporting — faint dot so an all-clear layer is never empty
         L.circleMarker([p.lat, p.lon], {
@@ -417,7 +417,7 @@ function renderMap(spatial) {
           fillOpacity: 0.4,
           color: 'transparent',
           weight: 0
-        }).bindPopup(`<b>${p.name}</b><br/>0.0 mm`).addTo(_mapLayer);
+        }).bindPopup(`<b>${p.name}</b><br/>0.00 mm`).addTo(_mapLayer);
       }
     });
   } else if (metric === 'wind' && data.points) {
@@ -432,7 +432,7 @@ function renderMap(spatial) {
           </div>`,
           iconSize: [20, 20]
         });
-        L.marker([p.lat, p.lon], { icon: arrow }).bindPopup(`<b>${p.name}</b><br/>${p.speed.toFixed(0)} kt @ ${p.dir.toFixed(0)}°`).addTo(_mapLayer);
+        L.marker([p.lat, p.lon], { icon: arrow }).bindPopup(`<b>${p.name}</b><br/>${p.speed.toFixed(2)} kt @ ${p.dir.toFixed(0)}°`).addTo(_mapLayer);
       }
     });
   } else if (metric === 'lightning' && data.count > 0) {
@@ -450,7 +450,7 @@ function renderMap(spatial) {
       icon: L.divIcon({
         className: 'uv-chip',
         html: `<div style="background: var(--bg-card); padding: 6px 12px; border-radius: 4px; border: 1px solid var(--border); font-family: var(--font-mono); font-size: 12px;">
-          UV: <b style="color: ${data.value >= 8 ? 'var(--danger)' : data.value >= 5 ? 'var(--warning)' : 'var(--success)'}">${data.value}</b>
+          UV: <b style="color: ${data.value >= 8 ? 'var(--danger)' : data.value >= 5 ? 'var(--warning)' : 'var(--success)'}">${data.value.toFixed(2)}</b>
         </div>`,
         iconSize: [80, 30]
       })
@@ -460,7 +460,7 @@ function renderMap(spatial) {
       icon: L.divIcon({
         className: 'wbgt-chip',
         html: `<div style="background: var(--bg-card); padding: 6px 12px; border-radius: 4px; border: 1px solid var(--border); font-family: var(--font-mono); font-size: 12px;">
-          WBGT: <b style="color: ${data.value >= 32 ? 'var(--danger)' : data.value >= 29 ? 'var(--warning)' : 'var(--success)'}">${data.value.toFixed(0)}</b>
+          WBGT: <b style="color: ${data.value >= 32 ? 'var(--danger)' : data.value >= 29 ? 'var(--warning)' : 'var(--success)'}">${data.value.toFixed(2)}</b>
         </div>`,
         iconSize: [80, 30]
       })
@@ -496,7 +496,7 @@ function renderLegend(metric, layers) {
     const maxR = pts.length ? Math.max(...pts.map(p => p.value || 0)) : 0;
     els.mapLegend.innerHTML = `<span style="background:${l.colors[0]}"></span> light→heavy`
       + (maxR > 0
-        ? ` · max ${maxR.toFixed(1)} mm`
+        ? ` · max ${maxR.toFixed(2)} mm`
         : ` · <span class="legend-note">${pts.length ? pts.length + ' stations · no rain detected' : 'no rain data'}</span>`);
     return;
   }
@@ -535,9 +535,9 @@ function renderPositions(positions) {
     return;
   }
   els.positionsBody.innerHTML = positions.map(p => {
-    const entry = p.entry_price != null ? '¢' + (p.entry_price * 100).toFixed(1) : '—';
-    const now = p.exit_price != null ? '¢' + (p.exit_price * 100).toFixed(1) : '—';
-    const pnl = p.pnl_pct != null ? (p.pnl_pct * 100).toFixed(1) + '%' : '—';
+    const entry = p.entry_price != null ? '¢' + (p.entry_price * 100).toFixed(2) : '—';
+    const now = p.exit_price != null ? '¢' + (p.exit_price * 100).toFixed(2) : '—';
+    const pnl = p.pnl_pct != null ? (p.pnl_pct * 100).toFixed(2) + '%' : '—';
     const pnlCls = !p.pnl_pct ? '' : p.pnl_pct >= 0 ? 'green' : 'red';
     return `<tr>
       <td>${escapeHtml(p.bracket || '')}</td>
@@ -572,14 +572,14 @@ function renderBrackets(event) {
 
   els.bracketsBody.innerHTML = trades.map(t => {
     const stake = t.stake_usd != null ? '$' + Number(t.stake_usd).toFixed(2) : '—';
-    const prob = t.prob != null ? (t.prob * 100).toFixed(1) + '%' : '—';
+    const prob = t.prob != null ? (t.prob * 100).toFixed(2) + '%' : '—';
     return `<tr>
       <td>${escapeHtml(t.bracket || '')}</td>
       <td class="num">${prob}</td>
-      <td class="num yes">${t.yes_price != null ? '¢' + (t.yes_price * 100).toFixed(1) : '—'}</td>
-      <td class="num no">${t.no_price != null ? '¢' + (t.no_price * 100).toFixed(1) : '—'}</td>
+      <td class="num yes">${t.yes_price != null ? '¢' + (t.yes_price * 100).toFixed(2) : '—'}</td>
+      <td class="num no">${t.no_price != null ? '¢' + (t.no_price * 100).toFixed(2) : '—'}</td>
       <td>${renderAction(t)}</td>
-      <td class="num">${t.edge != null ? (t.edge * 100).toFixed(1) + '%' : '—'}</td>
+      <td class="num">${t.edge != null ? (t.edge * 100).toFixed(2) + '%' : '—'}</td>
       <td class="num">${stake}</td>
     </tr>`;
   }).join('');
@@ -629,8 +629,8 @@ function patchPrices(brackets) {
       const no = b.no != null && b.no > 0 && b.no <= 1 ? b.no : null;
       const yesC = yes != null ? yes * 100 : null;
       const noC = no != null ? no * 100 : null;
-      if (cells[2]) cells[2].textContent = yesC != null ? '¢' + yesC.toFixed(1) : '—';
-      if (cells[3]) cells[3].textContent = noC != null ? '¢' + noC.toFixed(1) : '—';
+      if (cells[2]) cells[2].textContent = yesC != null ? '¢' + yesC.toFixed(2) : '—';
+      if (cells[3]) cells[3].textContent = noC != null ? '¢' + noC.toFixed(2) : '—';
     }
   });
   _priceTicks++;
@@ -649,7 +649,7 @@ async function loadDashboard() {
 
     // Prediction
     if (data.prediction) {
-      els.predValue.textContent = data.prediction.mean_c?.toFixed(1) + '°C' || '—';
+      els.predValue.textContent = data.prediction.mean_c?.toFixed(2) + '°C' || '—';
       els.predMeta.textContent = `±${data.prediction.std_c?.toFixed(2)}°C · hour ${data.prediction.hour_of_day ?? '—'} SGT`;
       renderPredictionChart(data.prediction);
     }

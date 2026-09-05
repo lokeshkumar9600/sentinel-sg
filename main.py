@@ -100,14 +100,14 @@ def _build_prediction_context(features: dict, storm: float, mu: float, sigma: fl
         ctx.append(f"{lightning} lightning strike{'s' if lightning != 1 else ''}")
     rain = features.get("rain_station_ratio", 0.0) or 0.0
     if rain:
-        ctx.append(f"{rain*100:.0f}% stations raining")
+        ctx.append(f"{rain*100:.2f}% stations raining")
     d = features.get("rain_dist_to_changi_km")
     if d is not None and d < 10:
-        ctx.append(f"rain {d:.1f}km from airport")
+        ctx.append(f"rain {d:.2f}km from airport")
     # Heat spread
     spread = features.get("spatial_temp_spread")
     if spread is not None:
-        ctx.append(f"island spread {spread:.1f}°C")
+        ctx.append(f"island spread {spread:.2f}°C")
     # Storm score summary
     if storm > 0.3:
         ctx.append(f"storm score {storm:.2f} (suppressing peak)")
@@ -117,7 +117,7 @@ def _build_prediction_context(features: dict, storm: float, mu: float, sigma: fl
     hr = features.get("hour_of_day")
     if hr is not None:
         df = _diurnal_heating_fraction(hr)
-        ctx.append(f"diurnal {df*100:.0f}% done")
+        ctx.append(f"diurnal {df*100:.2f}% done")
     return ctx
 
 
@@ -197,7 +197,7 @@ def find_live_event(max_days_ahead: int = MAX_DAYS_AHEAD_TO_CHECK):
     return None, []
 
 
-def evaluate_polymarket_brackets(event_date_str: str, mean_temp: float, std_temp: float, markets: list[dict]) -> dict:
+def evaluate_polymarket_brackets(event_date_str: str, mean_temp: float, std_temp: float, markets: list[dict], todays_max_so_far: float = None) -> dict:
     """
     Price Polymarket Binary Options using the predicted probability distribution,
     size each trade with the Kelly criterion, then apply a portfolio-level cap
@@ -214,6 +214,26 @@ def evaluate_polymarket_brackets(event_date_str: str, mean_temp: float, std_temp
         title = m["group_item_title"] or m["question"]
         low, high = parse_temperature_bounds(title)
         prob = calculate_bracket_probability(low, high, mean_temp, std_temp)
+        # ── FLOOR CHECK ──────────────────────────────────────────────────
+        # Once today's running max has reached or exceeded a bracket's upper
+        # bound, that bracket is impossible and no longshot BUY_YES makes
+        # sense: the floor has already closed above it.  Skip and let the
+        # entry gate log a CLEAN_SKIP so the history stays noise-free.
+        # Conversely, if the bracket's LOWER bound is above today's max by
+        # more than 2σ + mean headroom, also skip — we're chasing a tail
+        # that the model's own uncertainty can't justify.
+        # ──────────────────────────────────────────────────────────────────
+        if todays_max_so_far is not None and high is not None and todays_max_so_far > high:
+            # Running max has already exceeded the bracket ceiling → impossible.
+            trades.append({
+                "bracket": title, "prob": 0.0, "price": m.get("best_ask", 0) or 0,
+                "yes_price": m.get("best_ask"), "no_price": m.get("no_price"),
+                "yes_sell": m.get("best_bid"), "no_sell": m.get("no_bid"),
+                "action": "SKIP",
+                "reason": f"Floor exceeded: running max {todays_max_so_far:.2f}°C > bracket ceiling {high:.2f}°C",
+                "edge": 0.0, "stake_usd": 0.0,
+            })
+            continue
         # Use Gamma's bestAsk (accurate for negRisk brackets); fall back to the
         # CLOB book if the metadata is missing it.
         price = m.get("best_ask")
@@ -273,7 +293,10 @@ def main_loop():
 
         # 5. Evaluate
         if markets:
-            evaluate_polymarket_brackets(event_date_str, mu, sigma, markets)
+            evaluate_polymarket_brackets(
+                event_date_str, mu, sigma, markets,
+                todays_max_so_far=features.get("wsss_todays_max_so_far"),
+            )
         else:
             print(f"[!] No live event found within the next {MAX_DAYS_AHEAD_TO_CHECK} days. Retrying next cycle...")
 
