@@ -1,0 +1,18 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+# Deploy: dashboard.render.com → New + → Blueprint → select this repo.
+# The service runs a long-lived uvicorn process that serves the SPA and
+# maintains the live Polymarket WebSocket feed + background pollers in-process.
+services:
+  - type: web
+    name: sentinel-sg
+    runtime: python
+    plan: free
+    region: singapore          # closest to WSSS/Changi and Polymarket edge
+    buildCommand: python3 -m pip install -r requirements.txt
+    startCommand: python3 -m uvicorn server:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/prices
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.6"        # matches local runtime; also pinned in .python-version
+      # Optional: add DATA_GOV_API_KEY in the Render dashboard if you obtain a
+      # data.gov.sg API key. The code runs fine without one (defaults to "").
