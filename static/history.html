@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sentinel · History &amp; Performance</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div class="header__brand">
+        <a href="index.html" style="text-decoration:none;color:inherit">
+          <div class="header__logo">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+            </svg>
+          </div>
+        </a>
+        <h1 class="header__title">Sentinel</h1>
+      </div>
+      <nav class="nav">
+        <a class="nav__link" href="index.html">Dashboard</a>
+        <a class="nav__link is-active" href="history.html">History &amp; Performance</a>
+        <a class="nav__link" href="simulate.html">Simulations</a>
+      </nav>
+      <div class="header__right">
+        <div class="header__clock" id="clock">--:--:-- SGT</div>
+      </div>
+    </header>
+
+    <main class="page">
+      <section>
+        <h2 style="font-size:0.92rem;font-weight:600;color:var(--primary-ink);margin-bottom:4px;">Model Performance</h2>
+        <p style="font-size:0.78rem;color:var(--muted-ink);margin-bottom:16px;">Prediction journal results since the model started tracking.</p>
+        <div class="perf-stats" id="perf-stats">
+          <div class="perf-stat">
+            <span class="perf-stat__label">Days Tracked</span>
+            <span class="perf-stat__value" id="ps-days">—</span>
+          </div>
+          <div class="perf-stat">
+            <span class="perf-stat__label">Mean Absolute Error</span>
+            <span class="perf-stat__value" id="ps-mae">—</span>
+            <span class="perf-stat__note">°C avg miss</span>
+          </div>
+          <div class="perf-stat">
+            <span class="perf-stat__label">Mean Bias</span>
+            <span class="perf-stat__value" id="ps-bias">—</span>
+            <span class="perf-stat__note">positive = overpredict</span>
+          </div>
+          <div class="perf-stat">
+            <span class="perf-stat__label">±1σ Hit Rate</span>
+            <span class="perf-stat__value" id="ps-hit">—</span>
+            <span class="perf-stat__note">% actuals within predicted range</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel__header" style="flex-wrap:wrap;gap:10px;">
+          <h3 class="panel__title">Signal &amp; Decision Log</h3>
+          <div style="display:flex;gap:6px;margin-left:auto;" id="history-filters">
+            <button class="metric-toggle__btn" data-filter="ALL" data-active="true">All</button>
+            <button class="metric-toggle__btn" data-filter="TRADED">Trades</button>
+            <button class="metric-toggle__btn" data-filter="HELD">Held</button>
+            <button class="metric-toggle__btn" data-filter="SKIPPED">Skipped</button>
+          </div>
+        </div>
+        <div class="tablewrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th style="width:140px;">Time (SGT)</th>
+                <th>Signal</th>
+                <th>Bracket</th>
+                <th>Side</th>
+                <th class="t-right">Entry</th>
+                <th class="t-right">Exit</th>
+                <th class="t-right">P&amp;L</th>
+                <th class="t-right">Stake</th>
+                <th>Reason</th>
+              </tr>
+            </thead>
+            <tbody id="history-body">
+              <tr><td colspan="9" class="emptystate">Loading history...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span style="font-size:0.76rem;color:var(--muted-ink);">Sentinel Prediction Engine — historical log</span>
+      <span style="font-size:0.76rem;color:var(--muted-ink);">SGT</span>
+    </footer>
+  </div>
+  <script src="history.js"></script>
+</body>
+</html>

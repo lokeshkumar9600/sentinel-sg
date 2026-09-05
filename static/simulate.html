@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sentinel · Simulations</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div class="header__brand">
+        <a href="index.html" style="text-decoration:none;color:inherit">
+          <div class="header__logo">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+            </svg>
+          </div>
+        </a>
+        <h1 class="header__title">Sentinel</h1>
+      </div>
+      <nav class="nav">
+        <a class="nav__link" href="index.html">Dashboard</a>
+        <a class="nav__link" href="history.html">History &amp; Performance</a>
+        <a class="nav__link is-active" href="simulate.html">Simulations</a>
+      </nav>
+      <div class="header__right">
+        <div class="header__clock" id="clock">--:--:-- SGT</div>
+      </div>
+    </header>
+
+    <main class="page">
+      <!-- Scenario builder -->
+      <section class="panel">
+        <div class="panel__header">
+          <h3 class="panel__title">Scenario Builder</h3>
+          <span class="panel__time" style="font-size:0.7rem;color:var(--muted-ink);">Test the model against hypothetical conditions</span>
+        </div>
+        <div class="sim-controls" id="sim-controls">
+          <div class="control">
+            <label id="lab-hour">Hour of Day — <span id="ctl-hour-val">10</span>:00 SGT</label>
+            <input type="range" id="ctl-hour" min="6" max="18" step="1" value="10" />
+          </div>
+          <div class="control">
+            <label id="lab-temp">WSSS Current Temp (°C)</label>
+            <input type="range" id="ctl-temp" min="24" max="36" step="0.1" value="30.0" />
+            <span class="control__value" id="ctl-temp-val">30.0 °C</span>
+          </div>
+          <div class="control">
+            <label id="lab-rh">Relative Humidity (%)</label>
+            <input type="range" id="ctl-rh" min="20" max="100" step="1" value="70" />
+            <span class="control__value" id="ctl-rh-val">70 %</span>
+          </div>
+          <div class="control">
+            <label id="lab-wind">Wind (kt)</label>
+            <input type="range" id="ctl-wind" min="0" max="30" step="1" value="5" />
+            <span class="control__value" id="ctl-wind-val">5 kt</span>
+          </div>
+          <div class="control">
+            <label id="lab-dewp">Dewpoint (°C)</label>
+            <input type="range" id="ctl-dewp" min="20" max="32" step="0.1" value="27.0" />
+            <span class="control__value" id="ctl-dewp-val">27.0 °C</span>
+          </div>
+          <div class="control">
+            <label id="lab-cloud">Cloud (oktas)</label>
+            <input type="range" id="ctl-cloud" min="0" max="8" step="1" value="4" />
+            <span class="control__value" id="ctl-cloud-val">4/8</span>
+          </div>
+          <div class="control control--toggle" style="grid-column:1/-1;">
+            <label for="ctl-storm">Storm near Changi</label>
+            <label class="switch"><input type="checkbox" id="ctl-storm" /><span class="switch__slider"></span></label>
+          </div>
+          <div class="sim-actions">
+            <button class="btn btn--primary" id="sim-run">Run Simulation</button>
+            <span class="sim-hint" id="sim-hint">Adjust conditions and run to see predicted outcome &amp; model decisions.</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Results: prediction + Monte Carlo -->
+      <div class="page__grid">
+        <section class="panel">
+          <div class="panel__header"><h3 class="panel__title">Simulated Prediction</h3></div>
+          <div style="display:flex;flex-direction:column;align-items:center;padding:20px;gap:4px;" id="sim-pred">
+            <div style="font-size:2.6rem;font-weight:650;letter-spacing:-0.03em;color:var(--primary-ink);" id="sim-mu">—</div>
+            <div style="font-family:var(--font-mono);font-size:0.78rem;color:var(--secondary-ink);" id="sim-sigma">—</div>
+            <div style="height:68px;width:100%;margin-top:8px;" id="sim-chart"></div>
+            <div id="sim-context" style="width:100%;display:flex;flex-wrap:wrap;gap:6px;margin-top:12px;"></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel__header"><h3 class="panel__title">Monte Carlo (5,000 draws)</h3></div>
+          <div id="sim-mc" style="padding:16px 18px;font-family:var(--font-mono);font-size:0.78rem;color:var(--muted-ink);">Awaiting simulation...</div>
+        </section>
+      </div>
+
+      <!-- Decision table from the edge model -->
+      <section class="panel">
+        <div class="panel__header">
+          <h3 class="panel__title">Model Decisions (simulated market: today's live brackets)</h3>
+          <span class="panel__time" id="sim-event-date">—</span>
+        </div>
+        <div class="tablewrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Bracket</th>
+                <th class="t-right">Model %</th>
+                <th class="t-right">Yes Ask</th>
+                <th class="t-right">No Ask</th>
+                <th>Action</th>
+                <th class="t-right">Edge</th>
+                <th class="t-right">Stake</th>
+              </tr>
+            </thead>
+            <tbody id="sim-brackets-body">
+              <tr><td colspan="7" class="emptystate">Run a simulation to see model decisions.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span style="font-size:0.76rem;color:var(--muted-ink);">Sentinel Prediction Engine — simulated run</span>
+      <span style="font-size:0.76rem;color:var(--muted-ink);">Does not place orders.</span>
+    </footer>
+  </div>
+  <script src="simulate.js"></script>
+</body>
+</html>

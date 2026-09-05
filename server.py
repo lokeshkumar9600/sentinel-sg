@@ -20,6 +20,8 @@ import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 
+import numpy as np
+
 
 def _f(v, default: float):
     try:
@@ -28,13 +30,14 @@ def _f(v, default: float):
     except (TypeError, ValueError):
         return default
 
-from fastapi import FastAPI
+from fastapi import Body, FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from data.config import ENTRY_WINDOW_HOURS
 from data.feature_engine import extract_singapore_feature_vector
 from data.ingestion import fetch_all_data_gov, fetch_wsss_metar_history
+from data.prediction_journal import get_performance, record_prediction
 from data.spatial import extract_spatial_layers
 from execution.positions import (  # noqa: F401  (RESOLVED_OR_STALE used in helpers)
     RESOLVED_OR_STALE,
@@ -206,6 +209,12 @@ def _get_dashboard(fresh: bool = False) -> dict:
     mu, sigma = predict_daily_max_temp(features)
     storm = _convection_storm_score(features)
     context = _build_prediction_context(features, storm, mu, sigma)
+
+    # Keep the prediction journal in sync (upserted each cycle today).
+    try:
+        record_prediction(mu, sigma, _f(features.get("hour_of_day"), 12.0))
+    except Exception:  # noqa: BLE001 — journaling must never fail the dashboard
+        pass
 
     # 4-5. Find the live Polymarket event and price the brackets.
     event = None
@@ -449,6 +458,138 @@ def wsss():
     payload["latest"]["low_cloud_ft"] = lowest_base
 
     return JSONResponse(content=payload)
+
+
+@app.get("/api/performance")
+def performance():
+    """Model accuracy over the prediction journal — MAE, bias, ±1σ/±2σ hit
+    rates.  Past unsettled days are lazily settled from the WSSS METAR history
+    on each call."""
+    return JSONResponse(content=get_performance())
+
+
+def _build_synthetic_features(p: dict) -> dict:
+    """Turn a scenario-builder payload into the feature dict the model reads, so
+    the simulate endpoint exercises the exact same code path as the live
+    dashboard."""
+    hour = _f(p.get("hour"), 10.0)
+    temp = _f(p.get("temp"), 30.5)
+    rh = _f(p.get("rh"), 70.0)
+    wind = _f(p.get("wind"), 5.0)
+    dewp = _f(p.get("dewp"), 27.0)
+    cloud = _f(p.get("cloud"), 4.0)
+    storm = bool(p.get("storm", False))
+
+    # Diurnal-ish values so the synthetic day behaves like a real one.
+    uv = max(0.3, min(11.0, (1.0 + 0.9 * (10.0 - abs(hour - 13.0))) * (1.0 - cloud * 0.08)))
+    ramp = max(-3.0, min(3.0, 3.0 - (hour - 12.0)))
+
+    return {
+        "wsss_todays_max_so_far": temp - 0.5,
+        "wsss_current_temp": temp,
+        "wsss_dewp": dewp,
+        "wsss_wspd": wind,
+        "wsss_dpd": temp - dewp,
+        "wsss_rh": rh,
+        "wsss_altim": 1009.0,
+        "wsss_visib_num": 10.0,
+        "wsss_storm_txt": "TS" if storm else "",
+        "wsss_total_cloud_oktas": cloud,
+        "wsss_low_cloud_ft": 2200 if storm else 3000 + cloud * 300,
+        "wsss_press_trend_3h": -1.2 if storm else -0.2,
+        "wsss_temp_ramp_3h": ramp,
+        "minutes_since_last_metar": 5.0,
+        "uv_index": uv,
+        "wbgt_max": 0.5 * temp + 0.2 * dewp + 4.0,
+        "lightning_strike_count": 6 if storm else 0,
+        "hour_of_day": hour,
+        "rain_station_ratio": 0.4 if storm else 0.03,
+        "rain_hotspot_ratio": 0.6 if storm else 0.02,
+        "rain_dist_to_changi_km": 3.5 if storm else 18.0,
+        "changi_forecast_storm": storm,
+        "spatial_max_temp": temp + 0.2,
+        "spatial_temp_spread": 3.0 if storm else 1.6,
+    }
+
+
+@app.post("/api/simulate")
+def simulate(payload: dict = Body(...)):
+    """Run the full model against a synthetic scenario: predict, pull the live
+    bracket markets, evaluate, then Monte-Carlo the outcome distribution for
+    win-rate / expected P&L per bracket.  Purely advisory — never orders."""
+    features = _build_synthetic_features(payload)
+
+    mu, sigma = predict_daily_max_temp(features)
+    storm = _convection_storm_score(features)
+    context = _build_prediction_context(features, storm, mu, sigma)
+
+    # Live brackets = the same markets the live dashboard prices against.
+    event_date_str, markets = None, []
+    error = None
+    try:
+        event_date_str, markets = find_live_event()
+    except Exception as e:  # noqa: BLE001
+        error = str(e)
+
+    trades = []
+    if markets:
+        try:
+            trades = evaluate_polymarket_brackets(event_date_str, mu, sigma, markets)["trades"]
+        except Exception as e:  # noqa: BLE001
+            error = str(e)
+
+    # --- Monte Carlo: simulate the actual day settling N times ---
+    N = 5000
+    draws = np.random.default_rng().normal(mu, sigma, N)
+
+    low_lo = math.floor(mu - 2.5 * sigma - 0.5)
+    low_hi = math.ceil(mu + 2.5 * sigma + 0.5)
+    edges = np.arange(low_lo, low_hi + 0.5, 0.5)
+    hist = []
+    for i in range(len(edges) - 1):
+        cnt = int(((draws >= edges[i]) & (draws < edges[i + 1])).sum())
+        hist.append({"lo": round(float(edges[i]), 1), "hi": round(float(edges[i + 1]), 1), "count": cnt})
+
+    mc = {
+        "n": N,
+        "mean_c": round(float(np.mean(draws)), 3),
+        "std_c": round(float(np.std(draws)), 3),
+        "p10": round(float(np.percentile(draws, 10)), 2),
+        "p50": round(float(np.percentile(draws, 50)), 2),
+        "p90": round(float(np.percentile(draws, 90)), 2),
+        "histogram": hist,
+    }
+
+    # Per-bracket Monte-Carlo resolution.
+    from execution.polymarket import parse_temperature_bounds  # local import, cold path
+
+    for t in trades:
+        try:
+            low, high = parse_temperature_bounds(t["bracket"])
+        except Exception:  # noqa: BLE001
+            continue
+        if low is None or high is None:
+            continue
+        win = int(((draws >= low) & (draws < high)).sum())
+        t["mc_win_rate"] = round(win / N, 4)
+        ask = _f(t.get("price"), 0) or 0
+        stake = _f(t.get("stake_usd"), 0.0) or 0.0
+        # E[PnL] = win * (1 - ask) * stake - loss * ask * stake
+        t["mc_exp_pnl"] = round((win / N) * (1.0 - ask) * stake - (1.0 - win / N) * ask * stake, 3)
+        # Finite display bounds (JSON has no infinity).
+        t["mc_low"] = round(max(low, mu - 4.0 * sigma), 2)
+        t["mc_high"] = round(min(high, mu + 4.0 * sigma), 2)
+
+    return JSONResponse(content={
+        "generated_at_sgt": datetime.now(SGT).strftime("%Y-%m-%d %H:%M:%S SGT"),
+        "scenario": features,
+        "prediction": {"mean_c": round(mu, 2), "std_c": round(sigma, 2), "storm_score": round(storm, 3)},
+        "context": context,
+        "event_date_str": event_date_str,
+        "error": error,
+        "trades": trades,
+        "mc": mc,
+    })
 
 
 # Serve the static SPA from the same origin (must be last).
