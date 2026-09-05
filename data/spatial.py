@@ -203,10 +203,22 @@ def extract_spatial_layers(raw_data: dict) -> dict:
             four_day_list.append(day_text.strip())
     layers["four_day_outlook"] = four_day_list
 
-    # 11. Radar image URL
+    # 11. Radar image URL + geographic bounds (for a Leaflet overlay).
+    #     The URL is nested at records[0].image.url — the legacy "imageUrl"
+    #     field no longer exists on this endpoint.
     radar_data = raw_data.get("radar_70km", {}).get("data", {})
-    radar_url = radar_data.get("imageUrl") or radar_data.get("url")
+    records = radar_data.get("records", [])
+    radar_url = None
+    if records:
+        radar_url = records[0].get("image", {}).get("url")
     layers["radar_url"] = radar_url
+    bb = radar_data.get("boundaryBox") or {}
+    layers["radar_bounds"] = {
+        "north": bb.get("upperLeft", {}).get("latitude"),
+        "south": bb.get("lowerRight", {}).get("latitude"),
+        "west": bb.get("upperLeft", {}).get("longitude"),
+        "east": bb.get("lowerRight", {}).get("longitude"),
+    }
 
     return {
         "generated_at_sgt": datetime.now(SGT).strftime("%Y-%m-%d %H:%M:%S SGT"),

@@ -11,6 +11,8 @@ const $ = (id) => document.getElementById(id);
 // --- State ---
 let _map = null;
 let _mapLayer = null;
+let _radarLayer = null;        // live NEA radar precipitation overlay
+let _radarOn = true;           // radar overlay toggle state
 let _currentMetric = 'air_temperature';
 let _priceSeq = 0;
 let _priceTicks = 0;
@@ -401,20 +403,22 @@ function renderMap(spatial) {
     data.points.forEach(p => {
       const v = p.value || 0;
       if (v > 0) {
-        // Raining — scaled blue circle
+        // Raining — blue circle scaled by intensity (explicit hex: Leaflet sets
+        // fill as an SVG presentation attribute, where CSS var() never resolves).
+        const blue = v / (maxR || 1);
         L.circleMarker([p.lat, p.lon], {
-          radius: 6 + v * 4,
-          fillColor: 'var(--accent)',
-          fillOpacity: 0.6 + v / (maxR || 1) * 0.4,
-          color: '#fff',
-          weight: 1
+          radius: 7 + v * 5,
+          fillColor: blue > 0.6 ? '#2f8cff' : blue > 0.3 ? '#3ba6ff' : '#63c1ff',
+          fillOpacity: 0.55 + v / (maxR || 1) * 0.4,
+          color: '#eaf2ff',
+          weight: 1.2
         }).bindPopup(`<b>${p.name}</b><br/>${v.toFixed(2)} mm`).addTo(_mapLayer);
       } else {
         // Dry but reporting — faint dot so an all-clear layer is never empty
         L.circleMarker([p.lat, p.lon], {
           radius: 2.2,
-          fillColor: 'var(--muted-ink)',
-          fillOpacity: 0.4,
+          fillColor: '#5b6472',
+          fillOpacity: 0.35,
           color: 'transparent',
           weight: 0
         }).bindPopup(`<b>${p.name}</b><br/>0.00 mm`).addTo(_mapLayer);
@@ -473,8 +477,43 @@ function renderMap(spatial) {
   // Fix any zero-size init (map rendered while container was hidden)
   if (_map && _map.invalidateSize) _map.invalidateSize();
 
+  // Live NEA radar precipitation overlay (independent of the metric layer).
+  syncRadarOverlay(layers);
+
   // Update legend
   renderLegend(metric, layers);
+}
+
+// Toggle label lives on the button itself — update on each render.
+function syncRadarBtn() {
+  const btn = els.metricToggle.querySelector('[data-radar]');
+  if (btn) btn.dataset.active = _radarOn ? 'true' : 'false';
+}
+
+// Live NEA radar precipitation image over the station markers. The PNG from
+// data.gov.sg is transparent with colored rain cells; we tile it over the
+// radar's reported geographic boundary box. Refreshes every spatial poll.
+function syncRadarOverlay(layers) {
+  if (!_map) return;
+  const url = layers.radar_url;
+  const b = layers.radar_bounds;
+
+  // Toggle button exists (added in setupMetricToggle); keep its state current.
+  syncRadarBtn();
+
+  // Remove any prior overlay regardless — stale URL or toggle-off both clear it.
+  if (_radarLayer) {
+    _map.removeLayer(_radarLayer);
+    _radarLayer = null;
+  }
+  if (!_radarOn || !url || !b || b.north == null || b.south == null || b.west == null || b.east == null) {
+    return;
+  }
+  _radarLayer = L.imageOverlay(url, [[b.south, b.west], [b.north, b.east]], {
+    opacity: 0.65,
+    interactive: false,
+  });
+  _radarLayer.addTo(_map);
 }
 
 function renderLegend(metric, layers) {
@@ -515,15 +554,27 @@ function setupMetricToggle(layers) {
 
   els.metricToggle.innerHTML = metrics.map(m => `
     <button class="metric-toggle__btn" data-metric="${m.id}" data-active="${m.id === _currentMetric}">${m.label}</button>
-  `).join('');
+  `).join('')
+  + `<span class="metric-toggle__sep"></span>`
+  + `<button class="metric-toggle__btn" data-radar="1" data-active="${_radarOn ? 'true' : 'false'}">Radar</button>`;
 
-  els.metricToggle.querySelectorAll('button').forEach(btn => {
+  els.metricToggle.querySelectorAll('button[data-metric]').forEach(btn => {
     btn.addEventListener('click', () => {
       _currentMetric = btn.dataset.metric;
       els.metricToggle.querySelectorAll('button').forEach(b => b.dataset.active = 'false');
       btn.dataset.active = 'true';
       // Re-fetch spatial data for new metric
       loadSpatial();
+    });
+  });
+
+  els.metricToggle.querySelectorAll('button[data-radar]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      _radarOn = !_radarOn;
+      btn.dataset.active = _radarOn ? 'true' : 'false';
+      // No refetch needed — reuse the last spatial payload already at hand.
+      const last = _lastSpatial;
+      if (last) syncRadarOverlay(last.layers);
     });
   });
 }
@@ -678,12 +729,14 @@ async function loadDashboard() {
 }
 
 let _spatialSeq = 0;
+let _lastSpatial = null;   // cache of last payload, for instant radar toggling
 async function loadSpatial() {
   const seq = ++_spatialSeq;
   try {
     const res = await fetch('/api/spatial', { cache: 'no-store' });
     if (!res.ok || seq < _spatialSeq) return;
     const data = await res.json();
+    _lastSpatial = data;
 
     // Initialize map on first load
     if (!_map) initMap();
