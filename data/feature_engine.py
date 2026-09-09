@@ -1,5 +1,6 @@
 import math
 import os
+from collections import defaultdict
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -167,14 +168,24 @@ def extract_singapore_feature_vector(raw_data: dict, metar_history: list) -> dic
     if metar_history:
         # BUG FIX: don't assume the API returns records in a particular order -
         # sort explicitly by observation time, most recent first.
-        sorted_history = sorted(metar_history, key=lambda m: m.get("obsTime", 0), reverse=True)
+        sorted_history = sorted(
+            metar_history,
+            key=lambda m: _f(m.get("obsTime"), 0) if isinstance(m.get("obsTime"), (int, float)) else -1,
+            reverse=True
+        )
 
         # BUG FIX: a 24h rolling window can span into yesterday (e.g. at 2am SGT).
         # Restrict "today's max" to reports actually observed on today's SGT calendar date.
         today_sgt = datetime.now(SGT).date()
+        def _safe_sgt_date(ot):
+            try:
+                return _sgt_date_of(ot)
+            except (TypeError, ValueError, OSError):
+                return None
+
         todays_reports = [
             m for m in sorted_history
-            if "obsTime" in m and _sgt_date_of(m["obsTime"]) == today_sgt
+            if "obsTime" in m and _safe_sgt_date(m["obsTime"]) == today_sgt
         ]
         # Fall back to the full window if obsTime is missing or nothing matches today yet
         # (e.g. just after midnight before the first report of the new day lands).
@@ -233,6 +244,16 @@ def extract_singapore_feature_vector(raw_data: dict, metar_history: list) -> dic
         features["wsss_todays_max_so_far"] = 28.0
         features["wsss_dewp"] = 24.0
         features["wsss_wspd"] = 5.0
+        features["wsss_dpd"] = round(28.0 - 24.0, 1)
+        features["wsss_rh"] = round(_rh_from_dewpoint(28.0, 24.0), 1)
+        features["wsss_altim"] = 1013.0
+        features["wsss_wdir"] = 0.0
+        features["wsss_visib_num"] = 6.0
+        features["wsss_storm_txt"] = 0.0
+        features["wsss_total_cloud_oktas"] = 0.0
+        features["wsss_low_cloud_ft"] = 0.0
+        features["wsss_press_trend_3h"] = 0.0
+        features["wsss_temp_ramp_3h"] = 0.0
         features["minutes_since_last_metar"] = 999.0  # no data at all - treat as maximally stale
 
     # 2. Spatially Weighted Air Temperature (Nearby Changi Stations)
@@ -270,6 +291,15 @@ def extract_singapore_feature_vector(raw_data: dict, metar_history: list) -> dic
     # which would raise a KeyError the moment that model was actually invoked.
     features["hour_of_day"] = datetime.now(SGT).hour
 
+    # -- Temporal / seasonal features --
+    now_sgt = datetime.now(SGT)
+    features["is_weekend"] = 1 if now_sgt.weekday() >= 5 else 0
+    features["day_of_season"] = now_sgt.timetuple().tm_yday  # 1..366
+    # Cyclic encoding of hour so 23:00 and 00:00 are close in feature space
+    _hour_angle = 2.0 * math.pi * features["hour_of_day"] / 24.0
+    features["hour_sin"] = round(math.sin(_hour_angle), 4)
+    features["hour_cos"] = round(math.cos(_hour_angle), 4)
+
     rain_readings = raw_data.get("rainfall", {}).get("data", {}).get("readings", [])
     if rain_readings:
         rain_data = rain_readings[0].get("data", [])
@@ -286,6 +316,11 @@ def extract_singapore_feature_vector(raw_data: dict, metar_history: list) -> dic
             sum(1 for v in values if _f(v, 0.0) >= _RAIN_HOTSPOT_MM) / stations_total
         ) if stations_total else 0.0
 
+        # -- Rainfall intensity features --
+        _rain_floats = [_f(v, 0.0) for v in values]
+        features["rain_peak_intensity_mm"] = max(_rain_floats) if _rain_floats else 0.0
+        features["rain_total_spread"] = (max(_rain_floats) - min(_rain_floats)) if len(_rain_floats) >= 2 else 0.0
+
         # NEW: distance from Changi to nearest heavy-rain station
         min_dist = None
         for r in rain_data:
@@ -301,6 +336,8 @@ def extract_singapore_feature_vector(raw_data: dict, metar_history: list) -> dic
         features["rain_station_ratio"] = 0.0
         features["rain_hotspot_ratio"] = 0.0
         features["rain_dist_to_changi_km"] = None
+        features["rain_peak_intensity_mm"] = 0.0
+        features["rain_total_spread"] = 0.0
 
     # 5. NEW: official NEA two-hour forecast - does it call thundery/rainy weather
     # for the Changi area right now? Strong max-temp suppressor, previously unused.
@@ -329,5 +366,83 @@ def extract_singapore_feature_vector(raw_data: dict, metar_history: list) -> dic
         features["nea_forecast_high"] = None
         features["nea_forecast_low"]  = None
         features["nea_day_range"]     = None
+
+    # -- Lag / rolling features from METAR history --
+    try:
+        if metar_history:
+            # Group observations by SGT calendar date -> list of (date, [temps])
+            date_temps = defaultdict(list)
+            for m in metar_history:
+                ot = m.get("obsTime")
+                if ot is None:
+                    continue
+                try:
+                    d = _sgt_date_of(ot)
+                    t = m.get("temp")
+                    if t is not None:
+                        date_temps[d].append(float(t))
+                except (TypeError, ValueError):
+                    continue
+
+            sorted_dates = sorted(date_temps.keys())
+            today_sgt_date = datetime.now(SGT).date()
+
+            # Daily max for each date
+            daily_max = {d: max(temps) for d, temps in date_temps.items() if temps}
+
+            # Yesterday's max: the most recent date before today
+            yesterday_dates = [d for d in sorted_dates if d < today_sgt_date]
+            if yesterday_dates:
+                yesterday_date = yesterday_dates[-1]
+                features["yesterday_max_temp"] = daily_max[yesterday_date]
+            else:
+                features["yesterday_max_temp"] = None
+
+            # 3-day rolling average: average of the 3 most recent daily maxes (before today)
+            last3 = yesterday_dates[-3:] if len(yesterday_dates) >= 3 else yesterday_dates
+            if last3:
+                features["three_day_avg_max"] = round(
+                    sum(daily_max[d] for d in last3 if d in daily_max) / len(last3), 2
+                )
+            else:
+                features["three_day_avg_max"] = None
+
+            # Temperature delta: current temp minus yesterday's max
+            if features.get("yesterday_max_temp") is not None:
+                features["temp_delta_yesterday"] = round(
+                    _f(features["wsss_current_temp"], 28.0) - features["yesterday_max_temp"], 2
+                )
+            else:
+                features["temp_delta_yesterday"] = None
+        else:
+            features["yesterday_max_temp"] = None
+            features["three_day_avg_max"] = None
+            features["temp_delta_yesterday"] = None
+    except Exception:
+        features["yesterday_max_temp"] = None
+        features["three_day_avg_max"] = None
+        features["temp_delta_yesterday"] = None
+
+    # -- Interaction & moisture features (capture non-linear effects) --
+    try:
+        _rh = _f(features.get("wsss_rh"), 50.0)
+        _temp = _f(features.get("wsss_current_temp"), 28.0)
+        features["humidity_temp_interaction"] = round(_rh * (_temp - 26.0), 2)
+    except Exception:
+        features["humidity_temp_interaction"] = 0.0
+
+    try:
+        _oktas = _f(features.get("wsss_total_cloud_oktas"), 4.0)
+        _uv = _f(features.get("uv_index"), 0.0)
+        features["cloud_uv_interaction"] = round((8.0 - _oktas) * (_uv / 11.0), 4)
+    except Exception:
+        features["cloud_uv_interaction"] = 0.0
+
+    try:
+        _dpd = _f(features.get("wsss_dpd"), 4.0)
+        _oktas2 = _f(features.get("wsss_total_cloud_oktas"), 4.0)
+        features["dpd_cloud_interaction"] = round(_dpd * (_oktas2 / 8.0), 4)
+    except Exception:
+        features["dpd_cloud_interaction"] = 0.0
 
     return features

@@ -14,6 +14,7 @@ import threading
 import time
 
 from data.config import FAIR_VALUE_EXIT_RATIO, STOP_LOSS_PCT, STOP_COOLDOWN_SECONDS, TAKE_PROFIT_PCT
+import data.config as config
 
 # Actions a position can be in.
 HOLD = "HOLD"
@@ -45,12 +46,16 @@ class PositionBook:
 
     def enter(self, bracket: str, side: str, entry_price: float, stake_usd: float,
               model_prob: float, edge: float, hour_of_day: float | None = None,
-              replace: bool = False) -> bool:
+              model_sigma: float | None = None, replace: bool = False) -> bool:
         """Open (or replace) an entry for a bracket+side. Returns True if entered.
 
         `entry_price` is the BUY price paid (YES ask, or NO's negRisk price).
         One position per bracket+side; unless replace=True, an existing entry is
         kept and the new one is refused (no doubling down).
+
+        `model_sigma` (optional): the model's sigma at entry time. If provided and
+        TAKE_PROFIT_SIGMA_SCALE > 0, the take-profit threshold will widen by
+        TAKE_PROFIT_SIGMA_SCALE * model_sigma to account for higher volatility.
         """
         key = self._key(bracket, side)
         now = time.time()
@@ -70,6 +75,7 @@ class PositionBook:
                 "model_prob": model_prob,
                 "edge": edge,
                 "hour_of_day": hour_of_day,
+                "model_sigma": model_sigma,
                 "entry_at": now,
                 "exit_price": None,
                 "pnl_pct": 0.0,
@@ -99,7 +105,14 @@ class PositionBook:
                     continue
                 pos["exit_price"] = price
                 pos["pnl_pct"] = (price - pos["entry_price"]) / pos["entry_price"]
-                if pos["pnl_pct"] >= TAKE_PROFIT_PCT:
+
+                # Sigma-aware take-profit: widen target on high-sigma days
+                take_profit_pct = TAKE_PROFIT_PCT
+                model_sigma = pos.get("model_sigma")
+                if model_sigma is not None and config.TAKE_PROFIT_SIGMA_SCALE > 0:
+                    take_profit_pct = TAKE_PROFIT_PCT + config.TAKE_PROFIT_SIGMA_SCALE * model_sigma
+
+                if pos["pnl_pct"] >= take_profit_pct:
                     pos["action"] = TAKE_PROFIT
                     pos["action_at"] = now_epoch
                 elif pos["pnl_pct"] <= -STOP_LOSS_PCT:

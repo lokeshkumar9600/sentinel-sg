@@ -3,7 +3,7 @@
 import time
 import pytest
 from execution.positions import PositionBook, HOLD, TAKE_PROFIT, STOP
-from data.config import TAKE_PROFIT_PCT, STOP_LOSS_PCT
+from data.config import TAKE_PROFIT_PCT, STOP_LOSS_PCT, TAKE_PROFIT_SIGMA_SCALE
 
 
 class TestPositionBook:
@@ -133,3 +133,42 @@ class TestCooldown:
         assert len(closed) == 1 and closed[0]["action"] == TAKE_PROFIT
         assert "32°C|NO" not in book._cooldowns
         assert book.enter("32°C", "NO", 0.40, 1.0, 0.6, 0.05) is True
+
+
+class TestSigmaAwareProfitBand:
+    """Test sigma-aware take-profit widening."""
+
+    def test_take_profit_default_unchanged(self):
+        """With default TAKE_PROFIT_SIGMA_SCALE=0.0, behavior is unchanged."""
+        book = PositionBook()
+        book.enter("30°C", "YES", 0.50, 1.0, 0.6, 0.1, model_sigma=0.8)
+
+        # 1% gain should trigger take-profit (base TAKE_PROFIT_PCT = 0.01)
+        book.update_prices({"30°C|YES": 0.505})  # 1% gain
+        assert book.snapshot()[0]["action"] == TAKE_PROFIT
+
+    def test_take_profit_widens_with_sigma(self):
+        """When TAKE_PROFIT_SIGMA_SCALE > 0, take-profit widens with sigma."""
+        # Temporarily modify the config for this test
+        import data.config as config
+        original_scale = config.TAKE_PROFIT_SIGMA_SCALE
+        config.TAKE_PROFIT_SIGMA_SCALE = 0.01  # 1% per sigma unit
+
+        try:
+            book = PositionBook()
+            # High sigma day (0.8) -> take_profit = 0.01 + 0.01*0.8 = 0.018 (1.8%)
+            book.enter("30°C", "YES", 0.50, 1.0, 0.6, 0.1, model_sigma=0.8)
+
+            # 1.5% gain should NOT trigger (need 1.8%)
+            book.update_prices({"30°C|YES": 0.5075})  # 1.5% gain
+            assert book.snapshot()[0]["action"] == HOLD
+
+            # 2% gain should trigger
+            book.update_prices({"30°C|YES": 0.51})  # 2% gain
+            assert book.snapshot()[0]["action"] == TAKE_PROFIT
+        finally:
+            config.TAKE_PROFIT_SIGMA_SCALE = original_scale
+
+    def test_take_profit_sigma_scale_constant(self):
+        """Verify the constant exists and defaults to 0.0."""
+        assert TAKE_PROFIT_SIGMA_SCALE == 0.0

@@ -206,15 +206,46 @@ def predict_daily_max_temp(features: dict) -> tuple[float, float]:
     w = 0.15 + 0.85 * df                    # overnight (df~0.05) -> w~0.19; midday -> w~1.0
 
     # --- Daily self-improvement (meta-learning) ---
-    # Fit a learned climatology + bias-correction from the settled journal. Once
-    # enough days have settled (LEARN_MIN_SAMPLES), the climatological prior is
-    # the site's real observed mean. Before that, NEA's official 24h forecast
-    # high — the meteorologists' own expected daily max — replaces the fixed
-    # September constant, so the overnight prediction respects the expert forecast.
+    # Fit a learned climatology + bias-correction + per-hour bias curve from the
+    # settled journal.  Once enough days have settled (LEARN_MIN_SAMPLES), the
+    # climatological prior is the site's real observed mean.  Before that, NEA's
+    # official 24h forecast high — the meteorologists' own expected daily max —
+    # replaces the fixed September constant, so the overnight prediction respects
+    # the expert forecast.
     from data.model_learner import self_tune
     tune = self_tune()
-    if tune["clim_mean"] is not None:
-        prior = tune["clim_mean"]
+
+    # Data-driven climatology: use the ACTUAL observed WSSS daily max history
+    # for this month (learned, temp LOOKUP as of 2026) in preference to the
+    # hardcoded CLIM_MEAN_DEFAULT (31.3 understated September by ~1.5°C), then
+    # the learned journal climatology, then the NEA forecast, then the default.
+    # The climatology module is cheap (reads a local cache) so it's safe on the
+    # hot prediction path.
+    try:
+        from data.climatology import climatology_for_month
+        climo = climatology_for_month()
+        clim_mean = float(climo["mean"])
+        clim_std = float(climo["std"])
+        climo_source = climo["source"]
+    except Exception:  # noqa: BLE001 — never let climatology break the forecast
+        clim_mean, clim_std, climo_source = None, None, "unavailable"
+
+    if clim_mean is not None and 27.0 <= clim_mean <= 37.0:
+        # Climatology prior from real data outranks everything.  Includes a
+        # slight drift-tolerant blend with the learned journal mean if both exist.
+        learned = tune["clim_mean"]
+        if learned is not None:
+            # 50/50 blend: the journal mean reflects THIS site's settled days,
+            # the METAR climatology has more samples.  Weight the one with more
+            # data-equivalent confidence — the learned mean is intrinsically
+            # smaller-sample, so cap its blend weight at 0.35.
+            w_learned = min(0.35, tune["n_settled"] / 20.0)
+            prior = (1.0 - w_learned) * clim_mean + w_learned * learned
+        else:
+            prior = clim_mean
+        prior += tune["trend"]
+    elif tune["clim_mean"] is not None:
+        prior = tune["clim_mean"] + tune["trend"]  # drift-aware journal prior
     elif nea_high is not None and 28.0 <= nea_high <= 38.0:
         prior = nea_high
     else:
@@ -222,12 +253,20 @@ def predict_daily_max_temp(features: dict) -> tuple[float, float]:
     predicted_mean = w * predicted_mean + (1.0 - w) * prior
     predicted_mean += tune["bias"]
 
-    # Morning under-prediction correction. The blend's low-morning weight w leans
-    # on the NEA-high prior, which itself understates the day's remaining climb,
-    # leaving mu ~1°C below the settled max at H8-H12 (7/8 replayed days). Add the
-    # per-hour offset so the forecast tracks the observed daily max; afternoon
-    # (w -> 1.0) is unaffected. Skips non-morning hours and the pre-dawn regime.
-    predicted_mean += MORNING_BIAS_HOURS.get(int(hr), 0.0)
+    # Per-hour bias correction (learned, replaces the static MORNING_BIAS_HOURS
+    # once enough days have settled).  The learned curve captures the same
+    # morning under-prediction AND the afternoon over-prediction that the static
+    # table could not express.  Falls back to the static morning table until the
+    # learned curve is ready.
+    learned_hours = tune["hourly_bias"].get("hours", {})
+    hr_key = str(int(hr))
+    if learned_hours:
+        predicted_mean += learned_hours.get(hr_key, tune["bias"])
+    else:
+        predicted_mean += MORNING_BIAS_HOURS.get(int(hr), 0.0)
+        # Apply the learned trend on top of the static morning correction —
+        # even before the hourly curve engages, a drifting regime is real.
+        predicted_mean += 0.5 * tune["trend"]
 
     # Upper cap with a live NEA forecast: never predict meaningfully above both
     # the running max and the official forecast (+1.0°C tolerance). A cool
@@ -243,7 +282,19 @@ def predict_daily_max_temp(features: dict) -> tuple[float, float]:
     # uncertainty where we genuinely don't have a formed signal. Uses the learned
     # sigma floor once tuning has engaged (it tightens as real data accrues).
     if w < 0.5:
-        predicted_std = max(predicted_std, 0.85 * tune["sigma_floor"])
+        sigma_floor = tune["sigma_floor"]
+        # Data-driven climatological spread (from the METAR cache) is a better
+        # floor than the learned journal spread when the journal is thin.
+        if clim_std is not None:
+            sigma_floor = max(sigma_floor, 0.7 * clim_std)
+        predicted_std = max(predicted_std, 0.85 * sigma_floor)
+
+    # Post-hoc sigma calibration: multiply by the learned |error|/sigma ratio
+    # once it has settled on a stable value.  When the model has been over-
+    # confident (observed errors running wider than sigma), scale sigma UP so
+    # bracket probabilities stop claiming near-certainty on diffuse days.  The
+    # scale is clamped so a bad week can't blow sigma out to nonsense.
+    predicted_std *= tune["uncertainty_scale"]
 
     return predicted_mean, predicted_std
 

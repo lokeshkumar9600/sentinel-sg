@@ -117,3 +117,26 @@ TRADEABLE_HOURS_END = 20    # 20:00 SGT
 # Price sanity / liquidity guards
 MIN_LIVE_ASK = 0.03         # refuse asks below $0.03 (a 1-2c ask is thin noise, not edge)
 MAX_ASK_TO_TRADE = 0.97     # refuse asks at/above $0.97 (near-certain, no edge)
+
+# --- Adaptive risk controls --------------------------------------------------
+
+# Edge-scaled Kelly: stake multiplier bounds when scaling by edge/min_edge ratio.
+# Marginal edges (edge ~ min_edge) get half-sized bets (0.5x); strong edges get
+# up to 1.5x the base quarter-Kelly stake. Never exceeds MAX_STAKE_PER_POSITION_USD.
+EDGE_SCALE_FLOOR = 0.5
+EDGE_SCALE_CAP = 1.5
+
+# Sigma-aware profit band: widens take-profit on high-sigma days.
+# Default 0.0 means unchanged (backwards-compatible). If > 0, take_profit adds
+# TAKE_PROFIT_SIGMA_SCALE * model_sigma to the base TAKE_PROFIT_PCT.
+TAKE_PROFIT_SIGMA_SCALE = 0.0
+
+# Adaptive min-edge threshold: recent win/loss track record adjusts the entry bar.
+# - If last ADAPTIVE_WINDOW trades have win_rate >= ADAPTIVE_MIN_WIN_RATE_HI (0.6):
+#     min-edge threshold drops slightly (multiplier 0.9).
+# - If win_rate <= ADAPTIVE_MIN_WIN_RATE_LO (0.3):
+#     min-edge threshold rises (multiplier 1.3) to preserve bankroll.
+# Bounded: never drops below the absolute 1% floor (MIN_EDGE_THRESHOLD).
+ADAPTIVE_MIN_WIN_RATE_HI = 0.6
+ADAPTIVE_MIN_WIN_RATE_LO = 0.3
+ADAPTIVE_WINDOW = 8

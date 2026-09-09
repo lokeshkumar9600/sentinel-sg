@@ -1,7 +1,13 @@
 from scipy.stats import norm
+import threading
 
 from data.config import (
+    ADAPTIVE_MIN_WIN_RATE_HI,
+    ADAPTIVE_MIN_WIN_RATE_LO,
+    ADAPTIVE_WINDOW,
     BANKROLL_USD,
+    EDGE_SCALE_CAP,
+    EDGE_SCALE_FLOOR,
     EDGE_SIGMA_RATE,
     KELLY_FRACTION,
     MAX_ASK_TO_TRADE,
@@ -18,13 +24,72 @@ MAX_SINGLE_TRADE_PCT = 0.15
 MAX_TOTAL_EXPOSURE_PCT = 0.30
 
 
+# ---- Adaptive risk budget (thread-safe, in-memory) ----
+class _AdaptiveRiskTracker:
+    """Tracks recent trade outcomes to adjust the min-edge threshold."""
+
+    def __init__(self, window: int = ADAPTIVE_WINDOW):
+        self._lock = threading.Lock()
+        self._window = window
+        self._trades: list[bool] = []  # True = win, False = loss
+
+    def record_trade(self, win: bool) -> None:
+        """Record a closed trade outcome."""
+        with self._lock:
+            self._trades.append(win)
+            if len(self._trades) > self._window:
+                self._trades.pop(0)
+
+    def win_rate(self) -> float | None:
+        """Current win rate over the window, or None if no trades yet."""
+        with self._lock:
+            if not self._trades:
+                return None
+            return sum(self._trades) / len(self._trades)
+
+    def adaptive_edge_multiplier(self) -> float:
+        """
+        Returns a multiplier for the min-edge threshold based on recent performance.
+        - win_rate >= 0.6: multiplier 0.9 (lower the bar slightly)
+        - win_rate <= 0.3: multiplier 1.3 (raise the bar to preserve bankroll)
+        - else: 1.0 (no adjustment)
+        """
+        wr = self.win_rate()
+        if wr is None:
+            return 1.0
+        if wr >= ADAPTIVE_MIN_WIN_RATE_HI:
+            return 0.9
+        if wr <= ADAPTIVE_MIN_WIN_RATE_LO:
+            return 1.3
+        return 1.0
+
+
+# Module-level singleton
+_adaptive_tracker = _AdaptiveRiskTracker()
+
+
+def record_trade(win: bool) -> None:
+    """Public helper to record a closed trade outcome (win/loss)."""
+    _adaptive_tracker.record_trade(win)
+
+
+def adaptive_edge_multiplier() -> float:
+    """Public accessor for the current adaptive edge multiplier."""
+    return _adaptive_tracker.adaptive_edge_multiplier()
+
+
 def compute_effective_min_edge(model_sigma: float) -> float:
-    """Minimum edge to enter, scaled by model uncertainty. On a tight day
-    (sigma ~0.3) this is ~1.8%, on a diffuse day (sigma ~0.9) it's ~3.2%.
-    This is the main reason a 1% raw threshold still won't chase noise:
-    the engine demands more edge when it's less sure about the bracket
-    probability."""
-    return max(MIN_EDGE_THRESHOLD, EDGE_SIGMA_RATE * model_sigma)
+    """Minimum edge to enter, scaled by model uncertainty AND recent performance.
+
+    On a tight day (sigma ~0.3) this is ~1.8%, on a diffuse day (sigma ~0.9)
+    it's ~3.2%. The adaptive multiplier further adjusts:
+    - Good streak (win_rate >= 60% over last 8): multiplier 0.9, bar drops
+    - Bad streak (win_rate <= 30% over last 8): multiplier 1.3, bar rises
+    Never drops below the absolute 1% floor (MIN_EDGE_THRESHOLD).
+    """
+    base = max(MIN_EDGE_THRESHOLD, EDGE_SIGMA_RATE * model_sigma)
+    mult = adaptive_edge_multiplier()
+    return max(MIN_EDGE_THRESHOLD, base * mult)
 
 
 def _cap_to_profit_band(price: float, stake: float) -> tuple[float, float]:
@@ -48,11 +113,16 @@ def _kelly_fraction(p: float, price: float) -> float:
     return (p * net_odds - (1.0 - p)) / net_odds
 
 
-def _sized_stake(side_price: float, side_prob: float) -> float | None:
-    """Kelly-conviction sizing, clamped under the flat-stake ceiling and profit
-    band. Quarter-Kelly computes a stake proportional to edge strength; the
-    ceiling ($1) caps the downside; the profit band caps the upside. Returns
-    None when the stake collapses below $0.10 (too small to be worth logging)."""
+def _sized_stake(side_price: float, side_prob: float, edge: float, min_edge: float) -> float | None:
+    """Kelly-conviction sizing, scaled by edge strength, clamped under the
+    flat-stake ceiling and profit band.
+
+    Quarter-Kelly computes a base stake; then we scale by edge/min_edge ratio:
+    - edge ~ min_edge (marginal): 0.5x stake
+    - edge >> min_edge (strong): up to 1.5x stake
+    The ceiling ($1) and profit band still apply as hard caps.
+    Returns None when the stake collapses below $0.10.
+    """
     full_kelly = _kelly_fraction(side_prob, side_price)
     if full_kelly <= 0:
         return None
@@ -60,6 +130,12 @@ def _sized_stake(side_price: float, side_prob: float) -> float | None:
         BANKROLL_USD * (full_kelly * KELLY_FRACTION),
         BANKROLL_USD * MAX_SINGLE_TRADE_PCT,
     )
+    # Edge-strength scaling
+    if min_edge > 0:
+        edge_ratio = edge / min_edge
+        scale = max(EDGE_SCALE_FLOOR, min(EDGE_SCALE_CAP, edge_ratio))
+        kelly_stake *= scale
+
     stake, _ = _cap_to_profit_band(side_price, kelly_stake)
     # Clamp to the flat-stake ceiling (this is the only role of the old flat knob)
     if MAX_STAKE_PER_POSITION_USD > 0:
@@ -85,9 +161,11 @@ def compute_kelly_trade(
         so the trade is only entered if the model's probability truly beats the
         fair value after spread cost.
       - Kelly-conviction sizing under a flat ceiling: stake scales with edge
-        strength (quarter-Kelly) but never exceeds MAX_STAKE_PER_POSITION_USD.
+        strength (quarter-Kelly * edge/min_edge ratio) but never exceeds
+        MAX_STAKE_PER_POSITION_USD.
       - min_edge override: the caller can supply a per-cycle min edge from the
         confidence-scaled floor so high-sigma days demand higher edge.
+      - Adaptive min-edge: threshold adapts to recent win/loss track record.
     """
     edge_threshold = min_edge if min_edge is not None else MIN_EDGE_THRESHOLD
 
@@ -135,7 +213,7 @@ def compute_kelly_trade(
 
     # --- BUY_YES ---
     if eff_edge_yes >= edge_threshold:
-        stake = _sized_stake(market_price, p_model)
+        stake = _sized_stake(market_price, p_model, eff_edge_yes, edge_threshold)
         if stake is not None:
             max_win_pct = (stake * (1.0 - market_price) / market_price) / BANKROLL_USD
             return {
@@ -154,7 +232,7 @@ def compute_kelly_trade(
 
     # --- BUY_NO ---
     if eff_edge_no >= edge_threshold:
-        stake = _sized_stake(no_price, p_no)
+        stake = _sized_stake(no_price, p_no, eff_edge_no, edge_threshold)
         if stake is not None:
             max_win_pct = (stake * (1.0 - no_price) / no_price) / BANKROLL_USD
             return {
