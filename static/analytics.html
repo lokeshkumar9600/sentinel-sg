@@ -84,7 +84,7 @@
           </div>
         </div>
         <div style="height:90px;padding:4px 18px 12px;">
-          <svg id="lat-spark" width="100%" height="100%" style="display:block"></svg>
+          <canvas id="lat-spark"></canvas>
         </div>
       </section>
 
@@ -94,7 +94,7 @@
           <span class="panel__time" id="metar-meta">—</span>
         </div>
         <div style="height:250px;padding:8px 18px 18px;">
-          <svg id="metar-chart" width="100%" height="100%" style="display:block"></svg>
+          <canvas id="metar-chart"></canvas>
         </div>
         <div class="analytics-legend">
           <span><i class="sw sw--temp"></i> METAR temp °C</span>
@@ -108,7 +108,7 @@
           <span class="panel__time" id="pred-meta">—</span>
         </div>
         <div style="height:300px;padding:8px 18px 18px;">
-          <svg id="pred-chart" width="100%" height="100%" style="display:block"></svg>
+          <canvas id="pred-chart"></canvas>
         </div>
         <div class="analytics-legend" id="pred-legend">
           <span><i class="sw sw--mu"></i> μ (°C)</span>
@@ -122,6 +122,7 @@
       <span style="font-size:0.76rem;color:var(--muted-ink);">SGT</span>
     </footer>
   </div>
-  <script src="analytics.js?v=3"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="analytics.js?v=4"></script>
 </body>
 </html>

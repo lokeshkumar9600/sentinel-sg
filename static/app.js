@@ -358,18 +358,25 @@ function renderWsss(wsss) {
       path += (i ? 'L' : 'M') + xs(i).toFixed(1) + ',' + ys(t).toFixed(1);
     });
 
-    els.wsssSparkline.innerHTML = `
-      <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
-        <defs>
-          <linearGradient id="sparkGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="var(--accent)" stop-opacity="0.3"/>
-            <stop offset="100%" stop-color="var(--accent)" stop-opacity="0"/>
-          </linearGradient>
-        </defs>
-        <path d="${path} L${W},${H} L0,${H} Z" fill="url(#sparkGrad)"/>
-        <path d="${path}" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round"/>
-      </svg>
-    `;
+    // Chart.js sparkline for WSSS temp history
+    const canvasId = 'wsss-spark-canvas';
+    if (!document.getElementById(canvasId)) {
+      const c = document.createElement('canvas');
+      c.id = canvasId; c.style.width='100%'; c.style.height='100%';
+      els.wsssSparkline.innerHTML = ''; els.wsssSparkline.appendChild(c);
+    }
+    const sparkCtx = document.getElementById(canvasId).getContext('2d');
+    const sparkLabels = temps.map((_, i) => i);
+    if (window._sparkInst) window._sparkInst.destroy();
+    window._sparkInst = new Chart(sparkCtx, {
+      type: 'line', data: { labels: sparkLabels, datasets: [{
+        data: temps, tension: 0.35, pointRadius: 2, pointHoverRadius: 4,
+        borderColor: '#5a8fff', backgroundColor: 'rgba(90,143,255,0.15)',
+        borderWidth: 2, fill: true
+      }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+        scales: { x: { display: false }, y: { display: false } }, interaction: { intersect: false } }
+    });
   }
 }
 
@@ -677,33 +684,38 @@ function renderAction(trade) {
   return `<span class="tag tag--${cls}">${escapeHtml(cls)}</span>`;
 }
 
-// --- Prediction Chart ---
+// --- Prediction Chart (Chart.js) ---
+let _predChartInst = null;
 function renderPredictionChart(prediction) {
   if (!prediction) return;
   const mu = prediction.mean_c, sigma = Math.max(0.15, prediction.std_c);
-  const W = 260, H = 70, padL = 30, padR = 10, padT = 10, padB = 20;
   const lo = mu - 3.4 * sigma, hi = mu + 3.4 * sigma;
-  const xs = (t) => padL + ((t - lo) / (hi - lo)) * (W - padL - padR);
-  const ymax = 1 / (sigma * Math.sqrt(2 * Math.PI));
-  const ys = (y) => H - padB - (y / ymax) * (H - padT - padB);
-  const pdf = (x) => Math.exp(-0.5 * ((x - mu) / sigma) ** 2) / (sigma * Math.sqrt(2 * Math.PI));
-
   const n = 60;
-  let line = '';
+  const labels = [], data = [];
   for (let i = 0; i <= n; i++) {
     const x = lo + (i / n) * (hi - lo);
-    line += (i ? ' L' : 'M') + xs(x).toFixed(1) + ' ' + ys(pdf(x)).toFixed(1);
+    labels.push(x.toFixed(1));
+    data.push(Math.exp(-0.5 * Math.pow((x - mu) / sigma, 2)) / (sigma * Math.sqrt(2 * Math.PI)));
   }
-  const area = line + ` L${xs(hi).toFixed(1)} ${ys(0).toFixed(1)} L${xs(lo).toFixed(1)} ${ys(0).toFixed(1)} Z`;
-
-  els.predChart.innerHTML = `
-    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
-      <path d="${area}" fill="var(--accent)" opacity="0.15"/>
-      <path d="${line}" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
-      <line x1="${xs(mu).toFixed(1)}" y1="${padT}" x2="${xs(mu).toFixed(1)}" y2="${H - padB}" stroke="var(--accent)" stroke-width="1" stroke-dasharray="2 2"/>
-      <text x="${xs(mu).toFixed(1)}" y="${padT - 2}" fill="var(--text)" font-size="9" text-anchor="middle" font-family="var(--font-mono)">${mu.toFixed(1)}°C</text>
-    </svg>
-  `;
+  const ctx = document.getElementById('pred-chart').getContext('2d');
+  if (_predChartInst) _predChartInst.destroy();
+  _predChartInst = new Chart(ctx, {
+    type: 'line',
+    data: { labels, datasets: [{
+      label: 'PDF', data, tension: 0.4, pointRadius: 0,
+      fill: { target: 'origin', above: 'rgba(90,143,255,0.12)' },
+      borderColor: '#5a8fff', borderWidth: 2
+    }] },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { enabled: false } },
+      scales: {
+        x: { display: false },
+        y: { display: false, beginAtZero: true }
+      },
+      interaction: { intersect: false }
+    }
+  });
 }
 
 // --- Price Updates ---

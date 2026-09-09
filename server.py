@@ -75,6 +75,7 @@ from main import (
     find_live_event,
     predict_daily_max_temp,
 )
+from data.storm_timing import compute_storm_timing_factor
 
 # ---------------------------------------------------------------------------
 # Global feed + advisory position book — started/stopped by lifespan below.
@@ -464,7 +465,8 @@ def _get_dashboard(fresh: bool = False) -> dict:
     # 3. Predict today's max-temp distribution.
     mu, sigma = predict_daily_max_temp(features)
     storm = _convection_storm_score(features)
-    context = _build_prediction_context(features, storm, mu, sigma)
+    timing = compute_storm_timing_factor(features)
+    context = _build_prediction_context(features, storm, mu, sigma, timing)
     _cache_model(mu, sigma, features.get("hour_of_day", 12))
 
     # Keep the prediction journal in sync (upserted each cycle today).
@@ -1023,7 +1025,8 @@ def simulate(payload: dict = Body(...)):
 
     mu, sigma = predict_daily_max_temp(features)
     storm = _convection_storm_score(features)
-    context = _build_prediction_context(features, storm, mu, sigma)
+    timing = compute_storm_timing_factor(features)
+    context = _build_prediction_context(features, storm, mu, sigma, timing)
     _cache_model(mu, sigma, features.get("hour_of_day", 12))
 
     # Live brackets = the same markets the live dashboard prices against.

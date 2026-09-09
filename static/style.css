@@ -917,3 +917,6 @@ body {
   .wsss__grid { grid-template-columns: 1fr; }
   .wsss__stats { grid-template-columns: repeat(2, 1fr); }
 }
+/* Chart.js overlay polish */
+canvas { display: block; }
+.hero__chart canvas { height: 84px; }
