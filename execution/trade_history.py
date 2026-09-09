@@ -66,12 +66,22 @@ def log_signal(
 
 def log_entry(bracket: str, side: str, entry_price: float, stake_usd: float, edge: float) -> None:
     log_signal(f"ENTER_{side}", bracket, side, entry_price, None, stake_usd, edge, None, "")
+    try:
+        from execution.notifications import notify_entry
+        notify_entry(bracket, side, entry_price, stake_usd, edge)
+    except Exception:  # noqa: BLE001 — notifications must never break the log
+        pass
 
 
 def log_exit(bracket: str, side: str, exit_price: float, pnl_pct: float, reason: str = "") -> None:
     # Map exit reason to signal
     signal = "TAKE_PROFIT" if pnl_pct >= 0 else "STOP"
     log_signal(signal, bracket, side, None, exit_price, 0.0, 0.0, pnl_pct, reason)
+    try:
+        from execution.notifications import notify_exit
+        notify_exit(bracket, side, None, exit_price, pnl_pct, signal)
+    except Exception:  # noqa: BLE001 — notifications must never break the log
+        pass
 
 
 def log_signal_only(signal: str, bracket: str, edge: float, reason: str = "") -> None:

@@ -18,6 +18,7 @@ zero latency — no TTL cache, no Gamma polling.
 import logging
 import math
 import sys
+import threading
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -358,6 +359,80 @@ async def log_requests(request: Request, call_next):
         )
 
     return response
+
+
+# ---------------------------------------------------------------------------
+# Simple in-memory rate limiting for API endpoints.
+#
+# Token-bucket per client IP (proxy-aware: honours X-Forwarded-For). Heavy
+# endpoints (/api/dashboard) get a tighter budget than cheap ones. /api/prices
+# is polled ~10x/sec by the dashboard, so it and /api/health are exempted.
+# Falls back to permissive when the classifier hit is absent. Pure in-memory —
+# resets on process restart, which is fine for a single-instance dashboard.
+# ---------------------------------------------------------------------------
+from collections import defaultdict
+import os as _os
+
+RATE_LIMIT_DEFAULT = int(_os.getenv("RATE_LIMIT_DEFAULT_RPS", "5"))
+RATE_LIMIT_DASHBOARD = int(_os.getenv("RATE_LIMIT_DASHBOARD_RPM", "60"))
+
+# Endpoints exempt from rate limiting (polled constantly by the frontend).
+_RATE_LIMIT_EXEMPT = frozenset({"/api/prices", "/api/health"})
+# Endpoints with extra-strict budgets.
+_RATE_LIMIT_STRICT = frozenset({"/api/dashboard"})
+
+_buckets: dict[str, tuple[float, float]] = {}  # key -> (tokens, last_refill)
+_bucket_lock = threading.Lock()
+
+
+def _client_ip(request: Request) -> str:
+    fwd = request.headers.get("x-forwarded-for", "")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _rate_limit_key(path: str, client_ip: str) -> str:
+    if path in _RATE_LIMIT_STRICT:
+        return f"strict:{client_ip}"
+    return f"default:{client_ip}"
+
+
+@app.middleware("http")
+async def rate_limit(request: Request, call_next):
+    path = request.url.path
+    if not path.startswith("/api/") or path in _RATE_LIMIT_EXEMPT:
+        return await call_next(request)
+
+    client_ip = _client_ip(request)
+    # Rate constants: tokens is a float "burst allowance"; it refills at RPS.
+    if path in _RATE_LIMIT_STRICT:
+        rps = RATE_LIMIT_DASHBOARD / 60.0
+        burst = RATE_LIMIT_DASHBOARD
+    else:
+        rps = float(RATE_LIMIT_DEFAULT)
+        burst = RATE_LIMIT_DEFAULT * 10
+
+    key = _rate_limit_key(path, client_ip)
+    now = time.monotonic()
+    with _bucket_lock:
+        tokens, last = _buckets.get(key, (burst, now))
+        refill = (now - last) * rps
+        tokens = min(burst, tokens + refill)
+        _buckets[key] = (tokens, now)
+
+        if tokens < 1.0:
+            # Prune idle keys occasionally so the map doesn't grow unbounded.
+            if len(_buckets) > 1000:
+                cutoff = now - 300
+                _buckets.clear()
+            return JSONResponse(
+                {"detail": "Rate limit exceeded — please slow down."},
+                status_code=429,
+            )
+        _buckets[key] = (tokens - 1.0, now)
+
+    return await call_next(request)
 
 # ---------------------------------------------------------------------------
 # TTL cache for /api/dashboard only (full pipeline).  /api/prices is now
