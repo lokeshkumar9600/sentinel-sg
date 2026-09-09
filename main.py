@@ -99,7 +99,7 @@ def _convection_storm_score(features: dict) -> float:
     return min(1.0, score)
 
 
-def _build_prediction_context(features: dict, storm: float, mu: float, sigma: float) -> list[str]:
+def _build_prediction_context(features: dict, storm: float, mu: float, sigma: float, timing: dict = None) -> list[str]:
     """Build a short human-readable list of why the prediction is what it is."""
     ctx = []
     # Storm components
@@ -136,6 +136,23 @@ def _build_prediction_context(features: dict, storm: float, mu: float, sigma: fl
     delta_y = features.get("temp_delta_yesterday")
     if delta_y is not None:
         ctx.append(f"delta_vs_yest={delta_y:.1f}")
+    # Interaction features
+    hti = features.get("humidity_temp_interaction")
+    cui = features.get("cloud_uv_interaction")
+    dci = features.get("dpd_cloud_interaction")
+    if hti is not None and hti > 50.0:
+        ctx.append(f"humid_temp={hti:.1f} {'convect' if storm > 0.3 else 'greenhouse'}")
+    if cui is not None and cui > 0.3:
+        ctx.append(f"clear_UV={cui:.2f}")
+    if dci is not None and dci > 3.0:
+        ctx.append(f"evap_cool={dci:.2f}")
+    # Rainfall intensity
+    rpeak = features.get("rain_peak_intensity_mm", 0.0)
+    rspread = features.get("rain_total_spread", 0.0)
+    if rpeak > 5.0:
+        ctx.append(f"rain_peak={rpeak:.1f}mm")
+    if rspread > 3.0:
+        ctx.append(f"rain_spread={rspread:.1f}mm")
     # Diurnal
     hr = features.get("hour_of_day")
     if hr is not None:
@@ -171,6 +188,20 @@ def predict_daily_max_temp(features: dict) -> tuple[float, float]:
     yesterday_max = features.get("yesterday_max_temp")
     three_day_avg = features.get("three_day_avg_max")
     temp_delta_yesterday = features.get("temp_delta_yesterday")
+
+    # --- Interaction features for moisture/convective environment ---
+    # humidity_temp_interaction = RH * (T - 26): high values = moist + hot = more buoyant
+    humidity_temp_interaction = features.get("humidity_temp_interaction", 0.0)
+    # cloud_uv_interaction = (8 - oktas) * (UV/11): clear sky + high UV = max heating
+    cloud_uv_interaction = features.get("cloud_uv_interaction", 0.0)
+    # dpd_cloud_interaction = DPD * (oktas/8): dry air + clouds = evaporation cooling
+    dpd_cloud_interaction = features.get("dpd_cloud_interaction", 0.0)
+
+    # --- Rainfall intensity features ---
+    # rain_peak_intensity_mm: max station reading, indicates localized downpours
+    rain_peak = features.get("rain_peak_intensity_mm", 0.0)
+    # rain_total_spread: max - min across stations, indicates spatial heterogeneity
+    rain_spread = features.get("rain_total_spread", 0.0)
 
     storm = _convection_storm_score(features)
 
@@ -209,6 +240,40 @@ def predict_daily_max_temp(features: dict) -> tuple[float, float]:
         # Bound the adjustment to ±0.8°C to avoid over-correction on outliers
         trend_adjustment = max(-0.8, min(0.8, 0.3 * trend_signal))
         projected += trend_adjustment
+
+    # --- Interaction & rainfall adjustments ---
+    # humidity_temp_interaction: high RH + high T = more latent heat available for
+    # convection -> can enhance OR suppress peak depending on storm state.
+    # If storm score is high, moist air feeds convection -> more suppression.
+    # If storm score is low, moist air adds greenhouse effect -> slight warming.
+    if humidity_temp_interaction > 50.0:  # threshold: RH~80% at T~32°C
+        moist_factor = min(1.0, (humidity_temp_interaction - 50.0) / 50.0)  # 0..1
+        if storm > 0.3:
+            # Moisture feeds active convection -> additional suppression
+            projected -= 0.4 * moist_factor
+        else:
+            # Moist boundary layer without storms -> slight warming from greenhouse
+            projected += 0.2 * moist_factor
+
+    # cloud_uv_interaction: clear sky (low oktas) + high UV = maximum solar heating
+    # Scale: 0 (overcast/low UV) to ~1.0 (clear sky, UV~11)
+    if cloud_uv_interaction > 0.3:
+        clear_heating_boost = min(0.5, cloud_uv_interaction * 0.4)
+        projected += clear_heating_boost
+
+    # dpd_cloud_interaction: dry air (high DPD) + clouds = evaporation cooling
+    # High DPD means air is dry; clouds provide moisture source for evaporation
+    if dpd_cloud_interaction > 3.0:
+        evap_cooling = min(0.4, (dpd_cloud_interaction - 3.0) * 0.08)
+        projected -= evap_cooling
+
+    # Rainfall intensity adjustments
+    # Peak intensity > 5mm = heavy localized rain -> convective suppression
+    if rain_peak > 5.0:
+        projected -= min(0.6, (rain_peak - 5.0) * 0.05)
+    # Rain spread > 3mm = widespread rain coverage -> stronger suppression
+    if rain_spread > 3.0:
+        projected -= min(0.4, (rain_spread - 3.0) * 0.05)
 
     headroom = max(0.0, projected - current_max) * (1.0 - storm)  # storm caps the climb
     predicted_mean = current_max + headroom            # never below the running max

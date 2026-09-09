@@ -82,89 +82,6 @@ def _cloud_amount(clouds) -> float:
     return min(8.0, total), lowest_base
 
 
-def _fetch_nea_forecast_today() -> dict | None:
-    """Fetch the NEA 24-hour forecast for today (SGT) and return
-    {high: float, low: float} or None on any failure.
-
-    The API returns records keyed by issue-date (up to 4/day). Each record
-    has a validPeriod (start → end). We pick the most recent record whose
-    validPeriod covers today's daytime window (6am–6pm SGT), then extract
-    general.temperature.high/low — NEA's official expected max/min for the day.
-    """
-    today_sgt = datetime.now(SGT).strftime("%Y-%m-%d")
-    base_url = "https://api-open.data.gov.sg/v2/real-time/api/twenty-four-hr-forecast"
-    api_key = os.getenv("DATA_GOV_API_KEY", "")
-    headers = {"x-api-key": api_key} if api_key else {}
-    try:
-        resp = requests.get(f"{base_url}?date={today_sgt}", headers=headers, timeout=8)
-        resp.raise_for_status()
-        records = resp.json().get("data", {}).get("records", [])
-        if not records:
-            return None
-
-        # The record whose validPeriod covers today's daytime (6am–18:00).
-        # Multiple records may exist for the same issue-date (morning + evening
-        # updates); the latest-issued one with today in its validPeriod is best.
-        # If the current 6pm→6pm record was issued today, today's daytime is
-        # in the *previous* day's issue. Walk the list from newest→oldest.
-        now_sgt = datetime.now(SGT)
-        target_day = now_sgt.date()
-
-        def _valid_contains_today(rec):
-            vp = rec.get("general", {}).get("validPeriod", {})
-            try:
-                start = datetime.fromisoformat(vp.get("start", ""))
-                end   = datetime.fromisoformat(vp.get("end", ""))
-                # validPeriod typically midnight→midnight or 6pm→6pm.
-                # Check that today's daytime (6am–6pm SGT) overlaps this window.
-                today_6am  = now_sgt.replace(hour=6, minute=0, second=0, microsecond=0)
-                today_6pm  = now_sgt.replace(hour=18, minute=0, second=0, microsecond=0)
-                return start <= today_6am and end >= today_6pm
-            except (TypeError, ValueError, AttributeError):
-                return False
-
-        # Best candidate: the most recently updated record that covers today
-        # daytime; fall back to any record whose validPeriod overlaps today at
-        # all (catches the midnight→midnight issuance window).
-        best = None
-        for rec in sorted(records, key=lambda r: r.get("updatedTimestamp", ""), reverse=True):
-            if _valid_contains_today(rec):
-                best = rec
-                break
-        if best is None:
-            # Fallback: pick the latest record whose validPeriod contains right
-            # now — at least that record applies to the current moment.
-            for rec in sorted(records, key=lambda r: r.get("updatedTimestamp", ""), reverse=True):
-                vp = rec.get("general", {}).get("validPeriod", {})
-                try:
-                    start = datetime.fromisoformat(vp.get("start", ""))
-                    end   = datetime.fromisoformat(vp.get("end", ""))
-                    if start <= now_sgt <= end:
-                        best = rec
-                        break
-                except (TypeError, ValueError, AttributeError):
-                    continue
-        if best is None:
-            return None
-
-        temp = best.get("general", {}).get("temperature", {})
-        high = temp.get("high")
-        low  = temp.get("low")
-        if high is None or low is None:
-            return None
-        high_f, low_f = float(high), float(low)
-        # Sanity: Singapore daily max should be between 24°C and 40°C.
-        if high_f < 24.0 or high_f > 40.0 or low_f < 20.0 or low_f > 35.0:
-            return None
-        return {"high": high_f, "low": low_f}
-    except Exception:
-        return None
-
-
-# REMOVED: _fetch_nea_forecast_today() — use _parse_nea_forecast() on the
-# already-fetched payload from ingestion instead of making a second API call.
-
-
 def _parse_nea_forecast(payload: dict | None) -> dict | None:
     """Parse the twenty_four_hr_forecast payload (already fetched by ingestion)
     into {high: float, low: float}. Identical logic to _fetch_nea_forecast_today
@@ -318,7 +235,10 @@ def extract_singapore_feature_vector(raw_data: dict, metar_history: list) -> dic
     readings_list = temp_data.get("readings", [])
     # BUG FIX: guard against an empty readings list before indexing [0] (was an IndexError).
     if readings_list and "stations" in temp_data:
-        stations = {s["id"]: (s["location"]["latitude"], s["location"]["longitude"]) for s in temp_data.get("stations", [])}
+        stations = {
+            s.get("id"): (s.get("location", {}).get("latitude"), s.get("location", {}).get("longitude"))
+            for s in temp_data.get("stations", []) if s.get("id") is not None
+        }
         weighted_temp, total_weight = 0.0, 0.0
 
         for r in readings_list[0].get("data", []):
@@ -361,8 +281,10 @@ def extract_singapore_feature_vector(raw_data: dict, metar_history: list) -> dic
     if rain_readings:
         rain_data = rain_readings[0].get("data", [])
         stations_info = raw_data.get("rainfall", {}).get("data", {}).get("stations", [])
-        station_coords = {s["id"]: (s["location"]["latitude"], s["location"]["longitude"])
-                          for s in stations_info}
+        station_coords = {
+            s.get("id"): (s.get("location", {}).get("latitude"), s.get("location", {}).get("longitude"))
+            for s in stations_info if s.get("id") is not None
+        }
 
         values = [r.get("value", 0) for r in rain_data]
         stations_total = len(values)
