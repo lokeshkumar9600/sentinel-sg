@@ -198,7 +198,11 @@ def _run_guard_rails(snapshot: list[dict]) -> None:
             if low is None or high is None:
                 continue
             prob = calculate_bracket_probability(low, high, mu, sigma)
-            fair[f"{pos['bracket']}|{pos['side']}"] = prob
+            # fair[bracket|YES] = P(temp in bracket), fair[bracket|NO] = 1 - P(temp in bracket)
+            if pos["side"] == "NO":
+                fair[f"{pos['bracket']}|{pos['side']}"] = 1.0 - prob
+            else:
+                fair[f"{pos['bracket']}|{pos['side']}"] = prob
         df = _diurnal_heating_fraction(hour) if hour is not None else None
         book.manage_guard_rails(fair, df)
     except Exception:  # noqa: BLE001 — guard rails must never break the tick loop
@@ -425,7 +429,9 @@ async def rate_limit(request: Request, call_next):
             # Prune idle keys occasionally so the map doesn't grow unbounded.
             if len(_buckets) > 1000:
                 cutoff = now - 300
-                _buckets.clear()
+                stale = [k for k, (_, t) in _buckets.items() if t < cutoff]
+                for k in stale:
+                    del _buckets[k]
             return JSONResponse(
                 {"detail": "Rate limit exceeded — please slow down."},
                 status_code=429,
@@ -489,11 +495,15 @@ def _get_dashboard(fresh: bool = False) -> dict:
             }
             # Analytics: snapshot this cycle's bracket probabilities (with their
             # timestamp) so the analytics page can plot predictions over time.
-            record_snapshot(
-                mu, sigma,
-                [{"bracket": t.get("bracket"), "prob": t.get("prob")} for t in trades if t.get("bracket")],
-                hour_of_day,
-            )
+            # Must not leak into the event dict — record_snapshot is fire-and-forget.
+            try:
+                record_snapshot(
+                    mu, sigma,
+                    [{"bracket": t.get("bracket"), "prob": t.get("prob")} for t in trades if t.get("bracket")],
+                    hour_of_day,
+                )
+            except Exception:  # noqa: BLE001 — analytics must never destroy trades
+                pass
         else:
             event = {"date_str": event_date_str, "error": "No open event found within the lookahead window."}
     except Exception as e:  # noqa: BLE001

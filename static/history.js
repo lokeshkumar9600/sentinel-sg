@@ -99,7 +99,7 @@ async function loadEarlyPrediction() {
       : '—';
 
     if (!days.length) {
-      els.epBody.innerHTML = '<tr><td colspan="7" class="emptystate">No settled days with timeseries snapshots yet — lock-on analysis grows each day as the analytics store accrues minute-by-minute predictions.</td></tr>';
+      els.epBody.innerHTML = '<tr><td colspan="8" class="emptystate">No settled days with timeseries snapshots yet — lock-on analysis grows each day as the analytics store accrues minute-by-minute predictions.</td></tr>';
       return;
     }
 
@@ -116,6 +116,14 @@ async function loadEarlyPrediction() {
       const pEnd = r.winner_prob_end != null
         ? (r.winner_prob_end * 100).toFixed(1) + '%'
         : '—';
+      // Trade column: did the model actually enter on this day or only predict?
+      let trade;
+      if (r.traded) {
+        trade = '<span class="tag tag--ENTER">TRADED</span>';
+      } else {
+        const why = r.trade_reason ? ' — ' + r.trade_reason : '';
+        trade = '<span class="tag tag--SKIP" title="' + escapeHtml((r.trade_signal || 'NO_TRADE') + why) + '">PREDICTED ONLY</span>';
+      }
       const note = r.note ? ` <span class="text--muted" style="font-size:0.66rem">(${escapeHtml(r.note)})</span>` : '';
       return `<tr>
         <td>${fmtDay(r.date)}${note}</td>
@@ -125,12 +133,13 @@ async function loadEarlyPrediction() {
         <td>${held}</td>
         <td class="num">${pLock}</td>
         <td class="num">${pEnd}</td>
+        <td>${trade}</td>
       </tr>`;
     }).join('');
   } catch (e) {
     els.perfLockon.textContent = '—';
     els.perfHeld.textContent = '—';
-    els.epBody.innerHTML = `<tr><td colspan="7" class="emptystate">Early-prediction analysis unavailable: ${escapeHtml(e.message)}</td></tr>`;
+    els.epBody.innerHTML = `<tr><td colspan="8" class="emptystate">Early-prediction analysis unavailable: ${escapeHtml(e.message)}</td></tr>`;
   }
 }
 

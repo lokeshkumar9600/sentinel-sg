@@ -375,8 +375,9 @@ async function load() {
     // refresh every 30s to keep up with new METAR obs + model cycles
     setTimeout(load, 30000);
   } catch (e) {
-    els.metarMeta.textContent = 'failed: ' + e.message;
-    els.predMeta.textContent = 'failed: ' + e.message;
+    els.metarMeta.textContent = 'failed: ' + e.message + ' — retrying in 30s';
+    els.predMeta.textContent = 'failed: ' + e.message + ' — retrying in 30s';
+    setTimeout(load, 30000);
   }
 }
 

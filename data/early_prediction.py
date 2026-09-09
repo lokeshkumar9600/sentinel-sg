@@ -29,6 +29,7 @@ journal's settled actuals.
 from collections import defaultdict
 from data.analytics_store import get_snapshots
 from data.prediction_journal import get_journal
+from execution.trade_history import get_all_history
 
 # For a bracket to be "tradeable for ≥1% return" the model needs enough
 # confidence that buying YES (at p) would give ≥1% edge.  Without exact
@@ -85,6 +86,27 @@ def analyze_early_prediction() -> dict:
     settled = [e for e in journal if e.get("actual_max") is not None]
 
     snap_by_date = _group_snapshots_by_date()
+
+    # Per-day trading outcome (did the model actually enter a bracket, or only
+    # predict?).  Cross-reference the advisory trade history so the "how soon did
+    # it call it" table can also answer "did it trade it".  keyed by YYYY-MM-DD.
+    trade_by_date: dict[str, dict] = {}
+    for h in get_all_history():
+        ts = (h.get("timestamp_sgt") or "")[:10]
+        sig = (h.get("signal") or "").upper()
+        if not ts:
+            continue
+        entry = trade_by_date.setdefault(ts, {"traded": False, "reason": "", "signal": "NO_TRADE"})
+        if sig.startswith("ENTER_"):
+            entry["traded"] = True
+            entry["signal"] = "ENTER"
+            entry["reason"] = h.get("reason") or ""
+        elif not entry["traded"]:
+            # Keep the most descriptive non-entry reason (SKIP explains WHY no trade).
+            entry["signal"] = sig
+            if h.get("reason"):
+                entry["reason"] = h.get("reason")
+
     days = []
 
     for entry in settled:  # newest first from journal
@@ -109,6 +131,7 @@ def analyze_early_prediction() -> dict:
         snaps = snap_by_date.get(date_key, [])
         if not snaps:
             # No timeseries for this day → report settled result only.
+            t = trade_by_date.get(date_key, {"traded": False, "reason": "", "signal": "NO_TRADE"})
             days.append({
                 "date": date_str,
                 "date_key": date_key,
@@ -121,6 +144,9 @@ def analyze_early_prediction() -> dict:
                 "end_top_prob": None,
                 "total_snapshots": 0,
                 "note": "no timeseries snapshots available",
+                "traded": t["traded"],
+                "trade_signal": t["signal"],
+                "trade_reason": t["reason"],
             })
             continue
 
@@ -186,6 +212,7 @@ def analyze_early_prediction() -> dict:
                 winner_prob_end = b.get("prob", 0)
                 break
 
+        t = trade_by_date.get(date_key, {"traded": False, "reason": "", "signal": "NO_TRADE"})
         days.append({
             "date": date_str,
             "date_key": date_key,
@@ -198,6 +225,9 @@ def analyze_early_prediction() -> dict:
             "end_top_prob": round(end_top.get("prob", 0), 4),
             "winner_prob_end": round(winner_prob_end, 4),
             "total_snapshots": len(snaps),
+            "traded": t["traded"],
+            "trade_signal": t["signal"],
+            "trade_reason": t["reason"],
         })
 
     # Aggregate summary
@@ -209,6 +239,9 @@ def analyze_early_prediction() -> dict:
     # days without timeseries snapshots are settled results, not analysis.
     days_with_data = [d for d in days if d.get("total_snapshots", 0) > 0]
 
+    traded_count = sum(1 for d in days if d.get("traded"))
+    also_predicted_only = len(days) - traded_count
+
     summary = {
         "days_analyzed": len(days_with_data),
         "days_with_lock_on": days_with_lock,
@@ -216,6 +249,9 @@ def analyze_early_prediction() -> dict:
         "earliest_lock_on_hour": min(lock_on_hours) if lock_on_hours else None,
         "latest_lock_on_hour": max(lock_on_hours) if lock_on_hours else None,
         "pct_held_after_lock_on": round(held_count / days_with_lock, 2) if days_with_lock else None,
+        "days_traded": traded_count,
+        "days_predicted_only": also_predicted_only,
+        "pct_days_traded": round(traded_count / len(days), 2) if days else None,
     }
 
     return {

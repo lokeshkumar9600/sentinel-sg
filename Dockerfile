@@ -11,11 +11,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY . .
-
 # Create non-root user for security
 RUN useradd --create-home --shell /bin/bash appuser
+
+# Copy application code (before switching user so ownership can be set)
+COPY . .
+
+# Ensure the non-root user owns the app tree (data/, logs, etc.)
+RUN chown -R appuser:appuser /app
+
 USER appuser
 
 # Expose port

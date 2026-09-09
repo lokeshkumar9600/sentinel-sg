@@ -36,8 +36,10 @@ from data.config import (
 from data.prediction_journal import get_journal
 
 # How much weight each settled day carries in the rolling bias estimate.
-# 1.0 = plain mean (all days equal); smaller = recent days matter more.
-_BIAS_ALPHA = 1.0
+# alpha=1.0 would collapse the EMA to only the newest day (all history
+# discarded); a smaller alpha keeps memory so the estimate is genuinely a mean
+# of the last N days, weighted toward recent ones.
+_BIAS_ALPHA = 0.3
 
 
 def _settled_pairs() -> list[dict]:

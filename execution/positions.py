@@ -57,6 +57,11 @@ class PositionBook:
         with self._lock:
             if not replace and key in self._book:
                 return False
+            # Anti-churn: refuse to re-enter a bracket+side that recently stopped,
+            # so a losing position can't immediately reopen (STOP_COOLDOWN_SECONDS).
+            last_stop = self._cooldowns.get(key)
+            if last_stop is not None and now - last_stop < STOP_COOLDOWN_SECONDS:
+                return False
             self._book[key] = {
                 "bracket": bracket,
                 "side": side,
@@ -163,6 +168,9 @@ class PositionBook:
                 if pos["action"] in (TAKE_PROFIT, STOP, RESOLVED_OR_STALE):
                     closed.append({**pos, "closed_action": pos["action"]})
                     del self._book[key]
+                    # Mark a stop so the anti-churn cooldown blocks a quick re-entry.
+                    if pos["action"] == STOP:
+                        self._cooldowns[key] = time.time()
         return closed
 
     def snapshot(self) -> list[dict]:

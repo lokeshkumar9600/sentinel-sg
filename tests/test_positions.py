@@ -98,3 +98,38 @@ class TestPositionBook:
         book.enter("31°C", "NO", 0.30, 1.0, 0.4, 0.1)
         book.clear()
         assert len(book) == 0
+
+
+class TestCooldown:
+    """Anti-churn cooldown: a STOP blocks re-entry for a cooling-off period."""
+
+    def test_stop_blocks_reentry_within_cooldown(self):
+        book = PositionBook()
+        assert book.enter("33°C", "YES", 0.50, 1.0, 0.6, 0.03) is True
+        # Drop the exit quote -> STOP, then settle (records the stop time).
+        book.update_prices({"33°C|YES": 0.30})
+        assert book.snapshot()[0]["action"] == STOP
+        closed = book.settle_actions()
+        assert len(closed) == 1
+        # Immediate re-entry is refused by the cooldown.
+        assert book.enter("33°C", "YES", 0.40, 1.0, 0.6, 0.02) is False
+
+    def test_reentry_allowed_after_cooldown_expires(self):
+        book = PositionBook()
+        assert book.enter("33°C", "YES", 0.50, 1.0, 0.6, 0.03) is True
+        book.update_prices({"33°C|YES": 0.30})
+        book.settle_actions()
+        assert book.enter("33°C", "YES", 0.40, 1.0, 0.6, 0.02) is False
+        # Fudge the cooldown timestamp back past the window.
+        book._cooldowns["33°C|YES"] = time.time() - 10000
+        assert book.enter("33°C", "YES", 0.40, 1.0, 0.6, 0.02) is True
+
+    def test_take_profit_does_not_trigger_cooldown(self):
+        book = PositionBook()
+        assert book.enter("32°C", "NO", 0.40, 1.0, 0.6, 0.05) is True
+        # Exit quote far above entry -> TAKE_PROFIT; no cooldown recorded.
+        book.update_prices({"32°C|NO": 0.80})
+        closed = book.settle_actions()
+        assert len(closed) == 1 and closed[0]["action"] == TAKE_PROFIT
+        assert "32°C|NO" not in book._cooldowns
+        assert book.enter("32°C", "NO", 0.40, 1.0, 0.6, 0.05) is True
