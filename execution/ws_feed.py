@@ -23,6 +23,7 @@ times out and 10s+ have elapsed since the last one.
 
 import json
 import logging
+from collections import deque
 import ssl
 import threading
 import time
@@ -103,6 +104,8 @@ class LiveFeed:
         self._ws: websocket.WebSocket | None = None
         self._last_move_at: float | None = None  # epoch of last WS price tick
         self._last_move_count = 0                 # total ticks since start
+        self._tick_times: deque = deque(maxlen=6000)  # recent tick epochs → rolling rate
+        self._started_at: float | None = None         # epoch the WS loop began
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -126,6 +129,27 @@ class LiveFeed:
     def tick_count(self) -> int:
         with self._lock:
             return self._last_move_count
+
+    def tick_rate(self, window: float = 10.0) -> float:
+        """Rolling data points per second over the last `window` seconds."""
+        if window <= 0:
+            return 0.0
+        now = time.time()
+        with self._lock:
+            cutoff = now - window
+            n = sum(1 for t in self._tick_times if t >= cutoff)
+        return n / window
+
+    def uptime(self) -> float | None:
+        if not self._started_at:
+            return None
+        return time.time() - self._started_at
+
+    def last_tick_age(self) -> float | None:
+        """Seconds since the most recent WS price tick (None if no ticks yet)."""
+        if not self._last_move_at:
+            return None
+        return time.time() - self._last_move_at
 
     # ---- public API -------------------------------------------------------
 
@@ -274,6 +298,7 @@ class LiveFeed:
                 p["updated_at"] = time.time()
                 self._last_move_at = time.time()
                 self._last_move_count += 1
+                self._tick_times.append(time.time())
 
         elif event_type == "price_change":
             for pc in data.get("priceChanges", data.get("price_changes", [])):
@@ -294,6 +319,7 @@ class LiveFeed:
                     p["updated_at"] = time.time()
                     self._last_move_at = time.time()
                     self._last_move_count += 1
+                    self._tick_times.append(time.time())
 
         elif event_type == "last_trade_price":
             tok = data.get("asset_id")
@@ -308,6 +334,7 @@ class LiveFeed:
                 p["updated_at"] = time.time()
                 self._last_move_at = time.time()
                 self._last_move_count += 1
+                self._tick_times.append(time.time())
 
         # book / tick_size_change / etc. — acknowledged but not acted on
 
@@ -315,6 +342,7 @@ class LiveFeed:
 
     def _run(self):
         """Main loop: reconcile → connect → recv/heartbeat → reconnect."""
+        self._started_at = time.time()
         delay = RECONNECT_BASE_DELAY
 
         while not self._stop.is_set():

@@ -8,9 +8,9 @@ from zoneinfo import ZoneInfo
 # not in a "data" package - the original imports would raise ModuleNotFoundError.
 from data.feature_engine import extract_singapore_feature_vector
 from data.ingestion import fetch_all_data_gov, fetch_wsss_metar_history
-from data.config import STORM_W_FORECAST, STORM_W_METAR_TEXT, STORM_W_LIGHTNING, STORM_W_RAIN, STORM_W_RAIN_DIST
+from data.config import STORM_W_FORECAST, STORM_W_METAR_TEXT, STORM_W_LIGHTNING, STORM_W_RAIN, STORM_W_RAIN_DIST, CLIM_MEAN_DEFAULT, CLIM_SIGMA, SIGMA_RESIDUAL_FLOOR_C, TRADEABLE_HOURS_START, TRADEABLE_HOURS_END, MIN_LIVE_ASK, MAX_ASK_TO_TRADE, MORNING_BIAS_HOURS
 from execution.polymarket import fetch_event_raw, parse_markets_from_event, get_live_clob_price, parse_temperature_bounds
-from execution.kelly_sizer import calculate_bracket_probability, compute_kelly_trade, size_portfolio
+from execution.kelly_sizer import calculate_bracket_probability, compute_effective_min_edge, compute_kelly_trade, size_portfolio
 
 SGT = ZoneInfo("Asia/Singapore")
 POLL_INTERVAL_SECONDS = 60
@@ -38,14 +38,25 @@ def _hour_based_sigma(hr: float, raw_sigma: float) -> float:
     daily max almost always lands between ~12:00 and ~16:00 local; as the day moves past
     that window the odds of the running max being beaten drop fast, and by evening
     'wsss_todays_max_so_far' effectively IS the answer the market will settle against -
-    regardless of whether Polymarket's API has flagged the event 'closed' yet. Rather than
-    hard 12/16/19 steps, drive the taper continuously off the same heating fraction the
-    mean uses: the more of the day's heating that has completed, the tighter sigma gets.
+    regardless of whether Polymarket's API has flagged the event 'closed' yet.
+
+    The shrink rate is moderate (0.6 × diurnal fraction, not 0.75) so sigma stays
+    meaningfully above zero during mid-morning — when the model still relies heavily
+    on the NEA forecast and has limited live observations.  The floor (0.45°C) is
+    Singapore's inherent daily-max variability: even late in the day there's genuine
+    uncertainty about whether another reading will edge above the running max.
+
+    The irreducible residual uncertainty is combined in quadrature so sigma never
+    collapses below sqrt(0.45² + 0.5²) ≈ 0.67°C. This fixes the calibration defect
+    where sigma hits 0.45 at hours 12-13 while empirical errors run 1+°C.
     """
     if hr < 6:
-        return raw_sigma * 1.6            # pre-dawn: anchored to last night's min, genuinely uncertain
+        return raw_sigma * 1.9            # pre-dawn: anchored to last night's min, genuinely uncertain
     f = _diurnal_heating_fraction(hr)
-    return max(0.15, raw_sigma * (1.0 - 0.75 * f))  # ×1.0 this morning, ×0.25 once the peak is reached
+    # Diurnal taper component (same as before: slower shrinkage, 0.45 floor)
+    taper = max(0.45, raw_sigma * (1.0 - 0.6 * f))
+    # Combine in quadrature with the irreducible residual floor
+    return (taper**2 + SIGMA_RESIDUAL_FLOOR_C**2) ** 0.5
 
 
 def _convection_storm_score(features: dict) -> float:
@@ -118,6 +129,11 @@ def _build_prediction_context(features: dict, storm: float, mu: float, sigma: fl
     if hr is not None:
         df = _diurnal_heating_fraction(hr)
         ctx.append(f"diurnal {df*100:.2f}% done")
+    # NEA forecast prior
+    fhi = features.get("nea_forecast_high")
+    flo = features.get("nea_forecast_low")
+    if fhi is not None:
+        ctx.append(f"NEA forecast {flo if flo is not None else '?'}–{fhi:.1f}°C (prior)")
     return ctx
 
 
@@ -147,7 +163,13 @@ def predict_daily_max_temp(features: dict) -> tuple[float, float]:
     # falling slower) than the climatological curve expects.
     remaining = 1.0 - _diurnal_heating_fraction(hr)
     solar = max(0.2, uv / 11.0)                       # UV 0-11; dull days add less headroom
-    projected = current_temp + remaining * CLEAR_DAY_RANGE_C * solar
+    # Adaptive clear-day climb: use the NEA 24h forecast's expected high-low span
+    # (clamped to a sane 5-8°C band) when available, else the fixed 6.0°C constant.
+    # A hot day (wide range) expects more heating; a cool/rainy day expects less.
+    nea_high = features.get("nea_forecast_high")
+    nea_range = features.get("nea_day_range")
+    day_range = max(5.0, min(8.0, nea_range)) if nea_range is not None else CLEAR_DAY_RANGE_C
+    projected = current_temp + remaining * day_range * solar
 
     ramp = features.get("wsss_temp_ramp_3h", 0.0) or 0.0
     projected += 0.15 * max(-2.0, min(2.0, ramp))     # short-term agreement bias
@@ -156,11 +178,72 @@ def predict_daily_max_temp(features: dict) -> tuple[float, float]:
     predicted_mean = current_max + headroom            # never below the running max
 
     # --- sigma: uncertainty, widened by how unsure we are ---
-    base_std = 0.45
+    # base_std: the model's irreducible prediction error on a clear day with fresh
+    # data. 0.65 reflects that even with a perfect NEA forecast and live METAR,
+    # Singapore's daily max has ~0.5-0.7°C of genuine day-to-day variability
+    # around the forecast that no model can eliminate.  (The old 0.45 value was
+    # too low — it let the model claim 51% on a single bracket at 10am, creating
+    # false edges over thin-market asks that stopped out within one minute.)
+    base_std = 0.65
     staleness_widen = min(0.6, (stale_minutes / 60.0) * 0.25)  # up to +0.6°C once data is ~2.4h old
     storm_widen = 1.2 * storm                                  # convective days are inherently harder to call
     raw_std = base_std + staleness_widen + storm_widen
-    predicted_std = _hour_based_sigma(hr, raw_std)
+
+    # Forecast-aware uncertainty expansion: when the NEA forecast high sits well
+    # above the running max (large warming gap), the model's projection is driven
+    # by the forecast's accuracy, not live observations.  Expanding sigma by the
+    # forecast gap makes the model appropriately uncertain about tail-bracket bets
+    # during the early-morning "forecast-only" regime, reducing false edges that
+    # stop out within one polling cycle.
+    fc_gap = max(0.0, (nea_high or current_max) - current_max)
+    forecast_expand = 0.08 * min(6.0, fc_gap)  # +0.48°C for a 6°C gap, 0 when gap is zero
+    predicted_std = _hour_based_sigma(hr, raw_std + forecast_expand)
+
+    # --- Prior blend (overnight/early-morning accuracy) ---
+    # Blend the live projection with a daily-max prior. Weight w tracks the
+    # diurnal heating fraction: low early (trust the prior), 1.0 by afternoon.
+    df = _diurnal_heating_fraction(hr)
+    w = 0.15 + 0.85 * df                    # overnight (df~0.05) -> w~0.19; midday -> w~1.0
+
+    # --- Daily self-improvement (meta-learning) ---
+    # Fit a learned climatology + bias-correction from the settled journal. Once
+    # enough days have settled (LEARN_MIN_SAMPLES), the climatological prior is
+    # the site's real observed mean. Before that, NEA's official 24h forecast
+    # high — the meteorologists' own expected daily max — replaces the fixed
+    # September constant, so the overnight prediction respects the expert forecast.
+    from data.model_learner import self_tune
+    tune = self_tune()
+    if tune["clim_mean"] is not None:
+        prior = tune["clim_mean"]
+    elif nea_high is not None and 28.0 <= nea_high <= 38.0:
+        prior = nea_high
+    else:
+        prior = CLIM_MEAN_DEFAULT
+    predicted_mean = w * predicted_mean + (1.0 - w) * prior
+    predicted_mean += tune["bias"]
+
+    # Morning under-prediction correction. The blend's low-morning weight w leans
+    # on the NEA-high prior, which itself understates the day's remaining climb,
+    # leaving mu ~1°C below the settled max at H8-H12 (7/8 replayed days). Add the
+    # per-hour offset so the forecast tracks the observed daily max; afternoon
+    # (w -> 1.0) is unaffected. Skips non-morning hours and the pre-dawn regime.
+    predicted_mean += MORNING_BIAS_HOURS.get(int(hr), 0.0)
+
+    # Upper cap with a live NEA forecast: never predict meaningfully above both
+    # the running max and the official forecast (+1.0°C tolerance). A cool
+    # forecast can't be overridden by model optimism; a hot one already pulls mu
+    # up through the blend. Without a forecast the cap is skipped (preserves the
+    # unconstrained pre-change behavior).
+    if nea_high is not None:
+        cap = max(current_max, nea_high + 1.0)
+        predicted_mean = min(predicted_mean, cap)
+
+    # Mild sigma floor when live signal is weak (w < 0.5). Avoids full blend which
+    # would shrink midday sigma and degrade journal hit-rates; this only raises
+    # uncertainty where we genuinely don't have a formed signal. Uses the learned
+    # sigma floor once tuning has engaged (it tightens as real data accrues).
+    if w < 0.5:
+        predicted_std = max(predicted_std, 0.85 * tune["sigma_floor"])
 
     return predicted_mean, predicted_std
 
@@ -197,7 +280,7 @@ def find_live_event(max_days_ahead: int = MAX_DAYS_AHEAD_TO_CHECK):
     return None, []
 
 
-def evaluate_polymarket_brackets(event_date_str: str, mean_temp: float, std_temp: float, markets: list[dict], todays_max_so_far: float = None) -> dict:
+def evaluate_polymarket_brackets(event_date_str: str, mean_temp: float, std_temp: float, markets: list[dict], todays_max_so_far: float = None, hour_of_day: float = None, live_prices: list[dict] = None) -> dict:
     """
     Price Polymarket Binary Options using the predicted probability distribution,
     size each trade with the Kelly criterion, then apply a portfolio-level cap
@@ -208,6 +291,16 @@ def evaluate_polymarket_brackets(event_date_str: str, mean_temp: float, std_temp
     """
     print(f"\n--- LIVE PREDICTION for {event_date_str} ({datetime.now(SGT).strftime('%H:%M:%S SGT')}) ---")
     print(f"Predicted Max Temp (WSSS): {mean_temp:.2f}°C (±{std_temp:.2f}°C)\n")
+
+    # Live-price lookup keyed by bracket title. The WS snapshot carries the same
+    # best_ask/best_bid the UI renders via /api/prices; when present, the trade
+    # path prices edge off these quotes instead of Gamma metadata.
+    _live_by_bracket = {b.get("bracket"): b for b in (live_prices or [])}
+
+    # Confidence-scaled minimum edge for this cycle: on diffuse days the engine
+    # demands more edge before committing, so the 1% floor is only the absolute
+    # floor — in practice it's higher when the model is less sure.
+    min_edge = compute_effective_min_edge(std_temp)
 
     trades = []
     for m in markets:
@@ -236,22 +329,93 @@ def evaluate_polymarket_brackets(event_date_str: str, mean_temp: float, std_temp
             continue
         # Use Gamma's bestAsk (accurate for negRisk brackets); fall back to the
         # CLOB book if the metadata is missing it.
-        price = m.get("best_ask")
-        if price is None:
-            price = get_live_clob_price(m["yes_token_id"])
-        # negRisk NO price derived from the bracket group (sum of other YES asks).
-        no_price = m.get("no_price")
-        trade = compute_kelly_trade(prob, price, no_price=no_price)
+        gamma_ask = m.get("best_ask")
+        if gamma_ask is None:
+            gamma_ask = get_live_clob_price(m["yes_token_id"])
+        gamma_bid = m.get("best_bid")
+        no_price_gamma = m.get("no_price")
+        no_bid_gamma = m.get("no_bid")
+
+        # --- LIVE PRICE OVERRIDE from WebSocket feed ---
+        # The WS snapshot carries the same best_ask/best_bid the UI renders via
+        # /api/prices. When present and sane, override Gamma metadata so the
+        # model's edge is computed against the same quotes the user sees.
+        live_entry = _live_by_bracket.get(title) if _live_by_bracket else None
+        priced_from_live = False
+        yes_bid = gamma_bid
+        if live_entry is not None:
+            ws_ask = live_entry.get("yes")     # WS best_ask
+            ws_bid = live_entry.get("yes_sell") # WS best_bid
+            if ws_ask is not None and MIN_LIVE_ASK <= ws_ask <= MAX_ASK_TO_TRADE:
+                price = ws_ask
+                priced_from_live = True
+                if ws_bid is not None:
+                    yes_bid = ws_bid
+            else:
+                price = gamma_ask
+            # Recompute NO side via simple complement (mirrors polymarket.py:95-106)
+            if priced_from_live:
+                no_price = live_entry.get("no")   # WS NO buy = 1 - yes_sell(bid)
+                no_bid = live_entry.get("no_sell")  # WS NO sell = 1 - yes_ask
+            else:
+                no_price = no_price_gamma
+                no_bid = no_bid_gamma
+        else:
+            price = gamma_ask
+            no_price = no_price_gamma
+            no_bid = no_bid_gamma
+
+        # --- LIQUIDITY GUARD ---
+        # Refuse to trade when the quote is too thin (< $0.01) or near-certain
+        # (>= $0.97) — these are noise, not edge.
+        if price is None or price < MIN_LIVE_ASK or price >= MAX_ASK_TO_TRADE:
+            trades.append({
+                "bracket": title, "prob": prob, "price": price or 0,
+                "yes_price": price, "no_price": no_price,
+                "yes_sell": gamma_bid, "no_sell": no_bid,
+                "priced_from_live": priced_from_live,
+                "action": "SKIP",
+                "reason": f"Thin market: ask {'missing' if price is None else f'${price:.3f}' } outside safe range",
+                "edge": 0.0, "stake_usd": 0.0,
+            })
+            continue
+
+        trade = compute_kelly_trade(
+            prob, price,
+            no_price=no_price,
+            yes_bid=yes_bid,
+            no_bid=no_bid,
+            min_edge=min_edge,
+        )
         trade["bracket"] = title
         trade["prob"] = prob
         trade["price"] = price
         trade["yes_price"] = trade.get("yes_price", price)
         trade["no_price"] = trade.get("no_price", no_price)
-        # Buy/sell reference prices for BOTH sides (frontend shows all four);
-        # buy = ask, sell = bid.  None when the market is too thin to quote.
-        trade["yes_sell"] = m.get("best_bid")
-        trade["no_sell"] = m.get("no_bid")
+        trade["yes_sell"] = yes_bid
+        trade["no_sell"] = no_bid
+        trade["priced_from_live"] = priced_from_live
+        trade["min_edge_applied"] = round(min_edge, 3)
         trades.append(trade)
+
+    # --- SIGNAL GATE ---
+    # Overnight / outside the tradeable window there is no formed signal: mu is
+    # heavily pulled toward the climatological prior and the book is thin, so any
+    # "edge" computed now is noise. Rewrite staged BUY actions to NO_SIGNAL so the
+    # entry gate can't open a position. Carve-out: near-final lockout (df >= 0.97,
+    # heating essentially done) keeps legitimate late-day trades alive.
+    if hour_of_day is not None:
+        df = _diurnal_heating_fraction(hour_of_day)
+        tradeable = (TRADEABLE_HOURS_START <= hour_of_day <= TRADEABLE_HOURS_END) or (df >= 0.97)
+        if not tradeable:
+            for t in trades:
+                if t.get("action") in ("BUY_YES", "BUY_NO"):
+                    t["action"] = "NO_SIGNAL"
+                    t["stake_usd"] = 0.0
+                    t["reason"] = (
+                        f"Overnight — no formed signal yet ({int(hour_of_day):02d}:00 SGT); "
+                        f"edge {t.get('edge', 0.0) * 100:.1f}% is model noise vs a thin book"
+                    )
 
     trades = size_portfolio(trades)
 
@@ -296,6 +460,7 @@ def main_loop():
             evaluate_polymarket_brackets(
                 event_date_str, mu, sigma, markets,
                 todays_max_so_far=features.get("wsss_todays_max_so_far"),
+                hour_of_day=features.get("hour_of_day"),
             )
         else:
             print(f"[!] No live event found within the next {MAX_DAYS_AHEAD_TO_CHECK} days. Retrying next cycle...")

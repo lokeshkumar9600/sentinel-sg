@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="style.css?v=3" />
 </head>
 <body>
   <div class="app">
@@ -26,6 +26,8 @@
         <a class="nav__link" href="index.html">Dashboard</a>
         <a class="nav__link is-active" href="history.html">History &amp; Performance</a>
         <a class="nav__link" href="simulate.html">Simulations</a>
+        <a class="nav__link" href="backtest.html">Backtest</a>
+        <a class="nav__link" href="analytics.html">Analytics</a>
       </nav>
       <div class="header__right">
         <div class="header__clock" id="clock">--:--:-- SGT</div>
@@ -35,27 +37,61 @@
     <main class="page">
       <section>
         <h2 style="font-size:0.92rem;font-weight:600;color:var(--primary-ink);margin-bottom:4px;">Model Performance</h2>
-        <p style="font-size:0.78rem;color:var(--muted-ink);margin-bottom:16px;">Prediction journal results since the model started tracking.</p>
+        <p style="font-size:0.78rem;color:var(--muted-ink);margin-bottom:16px;">
+          How soon the model calls the right bracket — the practical question for
+          ≥1% target returns. End-of-day accuracy is easy; the value is in early,
+          stable lock-on. The market resolves using <b>WSSS METAR daily max only</b>.
+        </p>
         <div class="perf-stats" id="perf-stats">
           <div class="perf-stat">
-            <span class="perf-stat__label">Days Tracked</span>
+            <span class="perf-stat__label">Days Analyzed</span>
             <span class="perf-stat__value" id="ps-days">—</span>
           </div>
           <div class="perf-stat">
-            <span class="perf-stat__label">Mean Absolute Error</span>
-            <span class="perf-stat__value" id="ps-mae">—</span>
-            <span class="perf-stat__note">°C avg miss</span>
+            <span class="perf-stat__label">Avg Lock-On Hour</span>
+            <span class="perf-stat__value" id="ps-lockon">—</span>
+            <span class="perf-stat__note">SGT (earliest correct bracket)</span>
           </div>
           <div class="perf-stat">
-            <span class="perf-stat__label">Mean Bias</span>
-            <span class="perf-stat__value" id="ps-bias">—</span>
-            <span class="perf-stat__note">positive = overpredict</span>
+            <span class="perf-stat__label">Prediction Held</span>
+            <span class="perf-stat__value" id="ps-held">—</span>
+            <span class="perf-stat__note">% of days the call stayed correct</span>
           </div>
           <div class="perf-stat">
             <span class="perf-stat__label">±1σ Hit Rate</span>
             <span class="perf-stat__value" id="ps-hit">—</span>
-            <span class="perf-stat__note">% actuals within predicted range</span>
+            <span class="perf-stat__note">end-of-day (journal)</span>
           </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel__header">
+          <h3 class="panel__title">How Soon Did the Model Call It?</h3>
+          <span class="panel__time" id="ep-time">—</span>
+        </div>
+        <p style="font-size:0.76rem;color:var(--muted-ink);padding:4px 18px 8px;">
+          Per settled day: the earliest hour the model's top bracket matched
+          the settled winner and stayed matched. For ≥1% return the winning
+          bracket must be priced below ~$0.99.
+        </p>
+        <div class="tablewrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Day</th>
+                <th>Actual Max</th>
+                <th>Winner Bracket</th>
+                <th>Locked-On (SGT)</th>
+                <th>Held?</th>
+                <th class="t-right">P(lock-in)</th>
+                <th class="t-right">P(end-of-day)</th>
+              </tr>
+            </thead>
+            <tbody id="ep-body">
+              <tr><td colspan="7" class="emptystate">Loading early-prediction analysis...</td></tr>
+            </tbody>
+          </table>
         </div>
       </section>
 
@@ -97,6 +133,6 @@
       <span style="font-size:0.76rem;color:var(--muted-ink);">SGT</span>
     </footer>
   </div>
-  <script src="history.js"></script>
+  <script src="history.js?v=3"></script>
 </body>
 </html>

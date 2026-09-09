@@ -34,10 +34,18 @@ from fastapi import Body, FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from data.config import ENTRY_WINDOW_HOURS
+from data.config import (
+    BANKROLL_USD,
+    DAILY_LOSS_LIMIT_PCT,
+    ENTRY_WINDOW_HOURS,
+    TRADEABLE_HOURS_END,
+    TRADEABLE_HOURS_START,
+)
 from data.feature_engine import extract_singapore_feature_vector
 from data.ingestion import fetch_all_data_gov, fetch_wsss_metar_history
+from data.analytics_store import get_snapshots, record_snapshot
 from data.prediction_journal import get_performance, record_prediction
+from data.model_learner import self_tune
 from data.spatial import extract_spatial_layers
 from execution.positions import (  # noqa: F401  (RESOLVED_OR_STALE used in helpers)
     RESOLVED_OR_STALE,
@@ -61,6 +69,51 @@ from main import (
 # ---------------------------------------------------------------------------
 feed = LiveFeed()
 book = PositionBook()
+
+# Latest model state (mu/sigma/diurnal-heating) so the advisory book can run its
+# model-driven fair-value guard rail on every price tick without re-running the
+# full pipeline. Updated by _get_dashboard and simulate whenever they predict.
+_last_model = {"mu": None, "sigma": None, "hour_of_day": None, "at": 0.0}
+
+# Daily realized-loss tracker (circuit breaker). Reset at the first refresh of a
+# new SGT day; entries are gated off once realized losses for the day breach
+# DAILY_LOSS_LIMIT_PCT of bankroll.
+_day_loss = {"date": None, "usd": 0.0}
+
+
+def _cache_model(mu: float, sigma: float, hour_of_day: float) -> None:
+    _last_model["mu"] = mu
+    _last_model["sigma"] = sigma
+    _last_model["hour_of_day"] = hour_of_day
+    _last_model["at"] = time.time()
+
+
+def _today_sgt() -> str:
+    return datetime.now(SGT).strftime("%Y-%m-%d")
+
+
+def _accumulate_day_loss(closed_pos: dict) -> None:
+    """Add a settled position's realized P&L (USD) to the day's running total,
+    resetting the counter when the SGT date rolls over."""
+    today = _today_sgt()
+    if _day_loss["date"] != today:
+        _day_loss["date"] = today
+        _day_loss["usd"] = 0.0
+    stake = closed_pos.get("stake_usd") or 0.0
+    pnl_pct = closed_pos.get("pnl_pct") or 0.0
+    # For a position bought at entry and sold at exit, realized USD = stake*pnl_pct.
+    _day_loss["usd"] += stake * pnl_pct
+
+
+def _daily_loss_hit() -> bool:
+    """True once today's realized losses exceed DAILY_LOSS_LIMIT_PCT of bankroll."""
+    if _day_loss["date"] != _today_sgt():
+        _day_loss["date"] = _today_sgt()
+        _day_loss["usd"] = 0.0
+        return False
+    if not BANKROLL_USD:
+        return False
+    return _day_loss["usd"] <= -BANKROLL_USD * DAILY_LOSS_LIMIT_PCT
 
 
 def _sell_map(snapshot: list[dict]) -> dict:
@@ -94,10 +147,50 @@ def _refresh_book_from_feed(snapshot: list[dict]):
     if stale_keys:
         book.mark_resolved([f"{p['bracket']}|{p['side']}" for p in stale_keys])
     book.update_prices(_sell_map(snapshot))
-    # Log exits when positions settle (take-profit / stop / resolved)
+    # Model-driven guard rails: fair-value exit + lockout harvest. Uses the most
+    # recent cached mu/sigma to compute each held bracket's model fair value, so a
+    # collapsing position is exited on the model's re-rating BEFORE the market
+    # fully reprices (this is what catches the -90% gap-down stops).
+    _run_guard_rails(snapshot)
+    # Log exits when positions settle (take-profit / stop / resolved) and fold
+    # their realized P&L into the daily-loss circuit breaker.
     closed = book.settle_actions()
     for c in closed:
-        log_exit(c["bracket"], c["side"], c["exit_price"], c["pnl_pct"], c["closed_action"])
+        log_exit(c["bracket"], c["side"], c["exit_price"], c["pnl_pct"],
+                 c.get("reason") or c["closed_action"])
+        _accumulate_day_loss(c)
+
+
+def _run_guard_rails(snapshot: list[dict]) -> None:
+    """Compute model fair values for held positions and run the guard rails.
+
+    Fair value for a bracket's YES side is the model's live probability of that
+    bracket; NO fair = 1 - prob. Only runs if we have a fresh-enough cached
+    prediction (same-day), so the model-driven exit never acts on stale mu/sigma.
+    """
+    mu = _last_model.get("mu")
+    sigma = _last_model.get("sigma")
+    hour = _last_model.get("hour_of_day")
+    at = _last_model.get("at", 0.0)
+    if mu is None or sigma is None:
+        return
+    # Don't act on a model older than ~15 minutes (covers dashboard TTL gaps).
+    if time.time() - at > 900:
+        return
+    try:
+        from execution.kelly_sizer import calculate_bracket_probability
+        from execution.polymarket import parse_temperature_bounds
+        fair = {}
+        for pos in book.snapshot():
+            low, high = parse_temperature_bounds(pos["bracket"])
+            if low is None or high is None:
+                continue
+            prob = calculate_bracket_probability(low, high, mu, sigma)
+            fair[f"{pos['bracket']}|{pos['side']}"] = prob
+        df = _diurnal_heating_fraction(hour) if hour is not None else None
+        book.manage_guard_rails(fair, df)
+    except Exception:  # noqa: BLE001 — guard rails must never break the tick loop
+        pass
 
 
 def _run_entry_gate(trades: list[dict], hour_of_day: float, snapshot: list[dict], features: dict) -> None:
@@ -118,6 +211,16 @@ def _run_entry_gate(trades: list[dict], hour_of_day: float, snapshot: list[dict]
     df = _diurnal_heating_fraction(hour_of_day)
     lo, hi = ENTRY_WINDOW_HOURS
     sell = _sell_map(snapshot)
+    # Daily-loss circuit breaker: after realized losses for the SGT day breach
+    # DAILY_LOSS_LIMIT_PCT of bankroll, stop staging any new entries until tomorrow.
+    if _daily_loss_hit():
+        for t in trades:
+            if t.get("action") in ("BUY_YES", "BUY_NO"):
+                t["action"] = "DAILY_STOP"
+                t["reason"] = "Daily loss limit reached — entries halted until tomorrow"
+                log_signal_only("DAILY_STOP", t.get("bracket", ""), t.get("edge", 0),
+                                "Daily loss limit reached")
+        return
     for t in trades:
         action = t.get("action")
         if action == "BUY_YES":
@@ -176,6 +279,36 @@ def _run_entry_gate(trades: list[dict], hour_of_day: float, snapshot: list[dict]
             log_entry(bracket, side, entry_price, t.get("stake_usd", 0.0), t.get("edge", 0))
 
 
+def _build_signal_state(features: dict, trades: list[dict]) -> dict:
+    """Summarise the decision status for the UI: is today's model signal live or
+    still an overnight prior? Any bracket priced off the WebSocket feed? Shares
+    its window predicate with _run_entry_gate so the banner can never disagree
+    with the gate that turns signals into entries."""
+    hour = _f(features.get("hour_of_day"), 12.0)
+    df = _diurnal_heating_fraction(hour)
+    live_window = TRADEABLE_HOURS_START <= hour <= TRADEABLE_HOURS_END
+    tradeable = live_window or df >= 0.97
+    live_priced = any(t.get("priced_from_live") for t in (trades or []))
+
+    if not tradeable:
+        status = "no_signal"
+        label = f"Overnight — no formed signal yet ({int(hour):02d}:00 SGT)"
+    elif live_priced:
+        status = "live"
+        label = "Live signal — prices from WebSocket feed"
+    else:
+        status = "formed"
+        label = f"Signal formed {int(hour):02d}:00 SGT — prices from market metadata"
+    return {
+        "status": status,
+        "label": label,
+        "tradeable": bool(tradeable),
+        "live_priced": live_priced,
+        "hour_of_day": hour,
+        "df": round(df, 3),
+    }
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     feed.start()
@@ -209,6 +342,7 @@ def _get_dashboard(fresh: bool = False) -> dict:
     mu, sigma = predict_daily_max_temp(features)
     storm = _convection_storm_score(features)
     context = _build_prediction_context(features, storm, mu, sigma)
+    _cache_model(mu, sigma, features.get("hour_of_day", 12))
 
     # Keep the prediction journal in sync (upserted each cycle today).
     try:
@@ -218,33 +352,47 @@ def _get_dashboard(fresh: bool = False) -> dict:
 
     # 4-5. Find the live Polymarket event and price the brackets.
     event = None
+    snapshot = feed.snapshot()
+    hour_of_day = features.get("hour_of_day", 12)
     try:
         event_date_str, markets = find_live_event()
         if markets:
             result = evaluate_polymarket_brackets(
                 event_date_str, mu, sigma, markets,
                 todays_max_so_far=features.get("wsss_todays_max_so_far"),
+                hour_of_day=hour_of_day,
+                live_prices=snapshot,
             )
             trades = result["trades"]
             # When-to-trade: turn a promising bracket into an advisory book entry
             # (and fold any already-open position's manage signals in).
-            hour_of_day = features.get("hour_of_day", 12)
-            _run_entry_gate(trades, hour_of_day, feed.snapshot(), features)
+            _run_entry_gate(trades, hour_of_day, snapshot, features)
             event = {
                 "date_str": result["event_date_str"],
                 "trades": trades,
             }
+            # Analytics: snapshot this cycle's bracket probabilities (with their
+            # timestamp) so the analytics page can plot predictions over time.
+            record_snapshot(
+                mu, sigma,
+                [{"bracket": t.get("bracket"), "prob": t.get("prob")} for t in trades if t.get("bracket")],
+                hour_of_day,
+            )
         else:
             event = {"date_str": event_date_str, "error": "No open event found within the lookahead window."}
     except Exception as e:  # noqa: BLE001
         event = {"date_str": None, "error": str(e)}
+
+    signal_state = _build_signal_state(features, trades if isinstance(event, dict) and "trades" in event else [])
 
     payload = {
         "generated_at_sgt": generated_at_sgt,
         "prediction": {
             "mean_c": round(mu, 2),
             "std_c": round(sigma, 2),
-            "hour_of_day": features.get("hour_of_day"),
+            "hour_of_day": hour_of_day,
+            "signal_state": signal_state,
+            "tuning": self_tune(),
         },
         "context": context,
         "features": features,
@@ -471,6 +619,110 @@ def performance():
     return JSONResponse(content=get_performance())
 
 
+@app.get("/api/early_prediction")
+def early_prediction():
+    """Per-day analysis of how soon the model calls the right bracket.
+
+    Instead of end-of-day accuracy, this reports the hour at which the model
+    first locked onto the settled winner bracket and whether it held — directly
+    answering the practical trading question: how early is the signal good
+    enough for ≥1% returns?"""
+    from data.early_prediction import analyze_early_prediction
+    return JSONResponse(content=analyze_early_prediction())
+
+
+@app.get("/api/backtest")
+def backtest():
+    """Reconstruct the live advisory book's executed trades from the trade
+    history (real fills + stops/take-profits) — see data/backtest.py. Returns an
+    equity curve, per-trade rows, and summary stats for the backtest page."""
+    from data.backtest import run_backtest  # local import, cheap + keeps startup lean
+    return JSONResponse(content=run_backtest())
+
+
+@app.get("/api/analytics")
+def analytics():
+    """Time-series data for the analytics page.
+
+    1. metar  — every WSSS METAR temperature observation in the last 36h
+                (obsTime -> °C), so the page can plot every reading point.
+    2. brackets — the model's prediction history: each evaluate cycle's mu/sigma
+                and per-bracket model probabilities, timestamped, so the page can
+                plot how bracket probabilities moved through the day.
+    """
+    metars = fetch_wsss_metar_history()
+
+    from datetime import datetime as _dt
+    now = _dt.now(SGT).timestamp()
+    seen: dict = {}
+    metar_series = []
+    for m in metars:
+        obs_ts = m.get("obsTime") or m.get("observed") or 0
+        t = m.get("temp")
+        if not obs_ts or t is None or now - float(obs_ts) > 36 * 3600:
+            continue
+        # Dedupe overlapping observations: keep the latest reading per second.
+        if float(obs_ts) in seen:
+            continue
+        seen[float(obs_ts)] = True
+        try:
+            ts_sgt = _dt.fromtimestamp(float(obs_ts), tz=SGT).strftime("%Y-%m-%d %H:%M:%S SGT")
+        except (OSError, ValueError, OverflowError):
+            continue
+        metar_series.append({"ts_sgt": ts_sgt, "temp_c": float(t)})
+    metar_series.sort(key=lambda p: p["ts_sgt"])
+
+    snapshots = get_snapshots()
+
+    # ---- throughput & latency stats for the analytics page ----
+    cadence_s = 0.0
+    if len(metar_series) >= 2:
+        try:
+            seq_ts = [_dt.strptime(p["ts_sgt"], "%Y-%m-%d %H:%M:%S SGT").timestamp()
+                      for p in metar_series]
+            gaps = [b - a for a, b in zip(seq_ts, seq_ts[1:]) if b - a > 0]
+            if gaps:
+                cadence_s = sum(gaps) / len(gaps)
+        except (ValueError, OSError):
+            cadence_s = 0.0
+
+    stats = _live_feed_stats()
+    stats["metar_points"] = len(metar_series)
+    stats["metar_cadence_s"] = round(cadence_s) if cadence_s else None
+    stats["window_s"] = 36 * 3600
+
+    return JSONResponse(content={
+        "generated_at_sgt": datetime.now(SGT).strftime("%Y-%m-%d %H:%M:%S SGT"),
+        "metar": metar_series,
+        "prediction_series": snapshots,
+        "feed_stats": stats,
+    })
+
+
+def _live_feed_stats() -> dict:
+    """Cheap, callable-every-few-seconds feed stats (no METAR network fetch)."""
+    import time as _t
+    up = feed.uptime()
+    last_age = feed.last_tick_age()
+    return {
+        "connected": feed.connected,
+        "ticks_total": feed.tick_count,
+        "tick_rate_10s": round(feed.tick_rate(10.0), 2),
+        "tick_rate_60s": round(feed.tick_rate(60.0), 2),
+        "avg_rate_since_start": round((feed.tick_count / up) if up else 0.0, 2),
+        "last_tick_age_ms": None if last_age is None else round(last_age * 1000),
+        "uptime_sec": None if up is None else round(up),
+    }
+
+
+@app.get("/api/feed_stats")
+def feed_stats():
+    """Throughput & latency for the live WebSocket price feed — polled by the
+    analytics page's latency panel every few seconds. No METAR dependency, so
+    it stays instant even when the observation API is slow."""
+    return JSONResponse(content={"feed_stats": _live_feed_stats()})
+
+
 def _build_synthetic_features(p: dict) -> dict:
     """Turn a scenario-builder payload into the feature dict the model reads, so
     the simulate endpoint exercises the exact same code path as the live
@@ -525,6 +777,7 @@ def simulate(payload: dict = Body(...)):
     mu, sigma = predict_daily_max_temp(features)
     storm = _convection_storm_score(features)
     context = _build_prediction_context(features, storm, mu, sigma)
+    _cache_model(mu, sigma, features.get("hour_of_day", 12))
 
     # Live brackets = the same markets the live dashboard prices against.
     event_date_str, markets = None, []
@@ -540,6 +793,8 @@ def simulate(payload: dict = Body(...)):
             trades = evaluate_polymarket_brackets(
                 event_date_str, mu, sigma, markets,
                 todays_max_so_far=features.get("wsss_todays_max_so_far"),
+                hour_of_day=features.get("hour_of_day"),
+                live_prices=feed.snapshot(),
             )["trades"]
         except Exception as e:  # noqa: BLE001
             error = str(e)
@@ -589,7 +844,12 @@ def simulate(payload: dict = Body(...)):
     return JSONResponse(content={
         "generated_at_sgt": datetime.now(SGT).strftime("%Y-%m-%d %H:%M:%S SGT"),
         "scenario": features,
-        "prediction": {"mean_c": round(mu, 2), "std_c": round(sigma, 2), "storm_score": round(storm, 3)},
+        "prediction": {
+            "mean_c": round(mu, 2),
+            "std_c": round(sigma, 2),
+            "storm_score": round(storm, 3),
+            "signal_state": _build_signal_state(features, trades),
+        },
         "context": context,
         "event_date_str": event_date_str,
         "error": error,

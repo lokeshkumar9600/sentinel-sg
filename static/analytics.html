@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sentinel · Analytics</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css?v=3" />
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div class="header__brand">
+        <a href="index.html" style="text-decoration:none;color:inherit">
+          <div class="header__logo">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+            </svg>
+          </div>
+        </a>
+        <h1 class="header__title">Sentinel</h1>
+      </div>
+      <nav class="nav">
+        <a class="nav__link" href="index.html">Dashboard</a>
+        <a class="nav__link" href="history.html">History &amp; Performance</a>
+        <a class="nav__link" href="simulate.html">Simulations</a>
+        <a class="nav__link" href="backtest.html">Backtest</a>
+        <a class="nav__link is-active" href="analytics.html">Analytics</a>
+      </nav>
+      <div class="header__right">
+        <div class="header__clock" id="clock">--:--:-- SGT</div>
+      </div>
+    </header>
+
+    <main class="page">
+      <section>
+        <h2 style="font-size:0.92rem;font-weight:600;color:var(--primary-ink);margin-bottom:4px;">Analytics</h2>
+        <p style="font-size:0.78rem;color:var(--muted-ink);margin-bottom:16px;">
+          Time-series views of the raw observations and the model&rsquo;s live
+          bracket probabilities. Every WSSS METAR temperature reading, and every
+          evaluate-cycle prediction, plotted against time (SGT).
+          <span id="an-nav-note" class="text--muted" style="font-family:var(--font-mono);font-size:0.7rem;"></span>
+        </p>
+      </section>
+
+      <section class="panel">
+        <div class="panel__header">
+          <h3 class="panel__title">Feed Throughput &amp; Latency</h3>
+          <span class="panel__time" id="lat-meta">—</span>
+        </div>
+        <div class="lat-grid">
+          <div class="lat-hero">
+            <div class="lat__label">Live points / sec</div>
+            <div class="lat__value" id="lat-rate">—</div>
+            <div class="lat__note" id="lat-rate-note">10s rolling · 60s: —</div>
+          </div>
+          <div class="lat-stats">
+            <div class="stat">
+              <span class="stat__label">Feed</span>
+              <span class="stat__value" id="lat-conn">—</span>
+            </div>
+            <div class="stat">
+              <span class="stat__label">Last tick</span>
+              <span class="stat__value" id="lat-age">—</span>
+            </div>
+            <div class="stat">
+              <span class="stat__label">Ticks total</span>
+              <span class="stat__value" id="lat-ticks">—</span>
+            </div>
+            <div class="stat">
+              <span class="stat__label">Avg / sec</span>
+              <span class="stat__value" id="lat-avg">—</span>
+            </div>
+            <div class="stat">
+              <span class="stat__label">Uptime</span>
+              <span class="stat__value" id="lat-up">—</span>
+            </div>
+            <div class="stat">
+              <span class="stat__label">METAR cadence</span>
+              <span class="stat__value" id="lat-metar">—</span>
+            </div>
+          </div>
+        </div>
+        <div style="height:90px;padding:4px 18px 12px;">
+          <svg id="lat-spark" width="100%" height="100%" style="display:block"></svg>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel__header">
+          <h3 class="panel__title">WSSS Temperature — every METAR reading</h3>
+          <span class="panel__time" id="metar-meta">—</span>
+        </div>
+        <div style="height:250px;padding:8px 18px 18px;">
+          <svg id="metar-chart" width="100%" height="100%" style="display:block"></svg>
+        </div>
+        <div class="analytics-legend">
+          <span><i class="sw sw--temp"></i> METAR temp °C</span>
+          <span><i class="sw sw--dash"></i> 36h window</span>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel__header">
+          <h3 class="panel__title">Model bracket probabilities over time</h3>
+          <span class="panel__time" id="pred-meta">—</span>
+        </div>
+        <div style="height:300px;padding:8px 18px 18px;">
+          <svg id="pred-chart" width="100%" height="100%" style="display:block"></svg>
+        </div>
+        <div class="analytics-legend" id="pred-legend">
+          <span><i class="sw sw--mu"></i> μ (°C)</span>
+          <span><i class="sw sw--pred"></i> bracket P</span>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span style="font-size:0.76rem;color:var(--muted-ink);">Sentinel Prediction Engine — analytics</span>
+      <span style="font-size:0.76rem;color:var(--muted-ink);">SGT</span>
+    </footer>
+  </div>
+  <script src="analytics.js?v=3"></script>
+</body>
+</html>

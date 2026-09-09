@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sentinel · Backtest</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css?v=3" />
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div class="header__brand">
+        <a href="index.html" style="text-decoration:none;color:inherit">
+          <div class="header__logo">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+            </svg>
+          </div>
+        </a>
+        <h1 class="header__title">Sentinel</h1>
+      </div>
+      <nav class="nav">
+        <a class="nav__link" href="index.html">Dashboard</a>
+        <a class="nav__link" href="history.html">History &amp; Performance</a>
+        <a class="nav__link" href="simulate.html">Simulations</a>
+        <a class="nav__link is-active" href="backtest.html">Backtest</a>
+        <a class="nav__link" href="analytics.html">Analytics</a>
+      </nav>
+      <div class="header__right">
+        <div class="header__clock" id="clock">--:--:-- SGT</div>
+      </div>
+    </header>
+
+    <main class="page">
+      <section>
+        <h2 style="font-size:0.92rem;font-weight:600;color:var(--primary-ink);margin-bottom:4px;">Strategy Backtest</h2>
+        <p style="font-size:0.78rem;color:var(--muted-ink);margin-bottom:16px;">
+          Reconstructs the live advisory book's actual executed trades from the
+          trade history — real fills, stops and take-profits, not a simulation.
+          The market resolves using <b>WSSS METAR daily max only</b>;
+          all actuals below are sourced from the WSSS aviation weather station.
+          <span id="bt-assumption" class="text--muted" style="font-family:var(--font-mono);font-size:0.7rem;"></span>
+        </p>
+        <div class="perf-stats" id="bt-stats">
+          <div class="perf-stat">
+            <span class="perf-stat__label">Return</span>
+            <span class="perf-stat__value" id="bt-return">—</span>
+            <span class="perf-stat__note">on $1,000 bankroll</span>
+          </div>
+          <div class="perf-stat">
+            <span class="perf-stat__label">Total P&amp;L</span>
+            <span class="perf-stat__value" id="bt-pnl">—</span>
+          </div>
+          <div class="perf-stat">
+            <span class="perf-stat__label">Win Rate</span>
+            <span class="perf-stat__value" id="bt-winrate">—</span>
+            <span class="perf-stat__note" id="bt-wl">wins / losses</span>
+          </div>
+          <div class="perf-stat">
+            <span class="perf-stat__label">Profit Factor</span>
+            <span class="perf-stat__value" id="bt-pf">—</span>
+            <span class="perf-stat__note" id="bt-trades">trades taken</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel__header">
+          <h3 class="panel__title">Equity Curve</h3>
+          <span class="panel__time" id="bt-curve-time">—</span>
+        </div>
+        <div style="height:240px;padding:8px 18px 18px;">
+          <svg id="bt-curve" width="100%" height="100%" style="display:block"></svg>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel__header">
+          <h3 class="panel__title">Executed Trades</h3>
+          <span class="panel__time">live advisory book — real fills</span>
+        </div>
+        <div class="tablewrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Entry → Exit</th>
+                <th>Bracket (Side)</th>
+                <th class="num">Entry</th>
+                <th class="num">Exit</th>
+                <th class="num">Edge</th>
+                <th>Exit Signal</th>
+                <th class="t-right">P&amp;L</th>
+                <th class="t-right">Equity</th>
+              </tr>
+            </thead>
+            <tbody id="bt-body">
+              <tr><td colspan="8" class="emptystate">Loading backtest...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel__header">
+          <h3 class="panel__title">Per-Day Prediction vs Actual</h3>
+          <span class="panel__time">model confidence vs the settled WSSS max</span>
+        </div>
+        <div class="tablewrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Day</th>
+                <th class="t-right">Predicted (°C)</th>
+                <th class="t-right">Actual (°C)</th>
+                <th class="t-right">Error</th>
+                <th class="t-right">P(bracket)</th>
+              </tr>
+            </thead>
+            <tbody id="bt-day-body">
+              <tr><td colspan="5" class="emptystate">Loading journal...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span style="font-size:0.76rem;color:var(--muted-ink);">Sentinel Prediction Engine — real executed trades</span>
+      <span style="font-size:0.76rem;color:var(--muted-ink);">SGT</span>
+    </footer>
+  </div>
+  <script src="backtest.js?v=3"></script>
+</body>
+</html>

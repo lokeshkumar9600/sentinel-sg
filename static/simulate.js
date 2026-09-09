@@ -175,7 +175,11 @@ async function runSim() {
 
     if (p.mean_c != null) {
       els.mu.textContent = p.mean_c.toFixed(2) + '°C';
-      els.sigma.textContent = `±${p.std_c != null ? p.std_c.toFixed(2) : '·'}°C · storm ${p.storm_score != null ? p.storm_score.toFixed(2) : '·'}`;
+      const ss = p.signal_state;
+      const banner = ss
+        ? `<span class="signal-banner" data-status="${escapeHtml(ss.status)}">${escapeHtml(ss.label)}</span>`
+        : '';
+      els.sigma.innerHTML = `±${p.std_c != null ? p.std_c.toFixed(2) : '·'}°C · storm ${p.storm_score != null ? p.storm_score.toFixed(2) : '·'}${banner ? '<br>' + banner : ''}`;
     } else {
       els.mu.textContent = '—';
       els.sigma.textContent = 'no prediction';

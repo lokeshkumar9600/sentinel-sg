@@ -99,68 +99,88 @@ function flowIcon(label, color) {
 }
 
 // Render a small live-data chip: a soft key label + a colored live value.
-function flowChip(x, y, key, value, color, active) {
-  const w = 84, h = 20;
+function flowChip(x, y, key, value, color, active, title) {
+  const w = 96, h = 20;
   return `<g>
     <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="5"
       fill="${active ? color : '#5f6368'}" fill-opacity="0.08"
       stroke="${active ? color : '#3a414d'}" stroke-width="0.8"/>
-    <text x="${x + 8}" y="${y + 13}" font-size="8.5" fill="var(--muted-ink)"
+    <title>${title || key}: ${value}</title>
+    <text x="${x + 7}" y="${y + 13}" font-size="8" fill="var(--muted-ink)"
       font-family="JetBrains Mono, monospace">${key}</text>
-    <text x="${x + w - 8}" y="${y + 13}" text-anchor="end" font-size="10" font-weight="600"
+    <text x="${x + w - 7}" y="${y + 13}" text-anchor="end" font-size="10" font-weight="600"
       fill="${active ? color : '#5f6368'}" font-family="JetBrains Mono, monospace">${value}</text>
   </g>`;
 }
 
 function renderDataFlow(data) {
-  const W = 1200, H = 440;
-  const R = 32;                       // node radius on the compute spine
-  const SPINE = 220;                  // y of the compute spine
+  const W = 1240, H = 740;
+  const R = 34;                       // node radius on the vertical engine spine
+  const SPINE_X = 1060;               // x of the compute spine
   const f = data.features || {};
   const pred = data.prediction || {};
   const trades = (data.event && data.event.trades) || [];
   const top = trades.find(t => t.edge != null) || null;
   const nFeat = Object.keys(f).length;
 
-  // The real data inputs feeding the engine.  These are the actual live
-  // channels the prediction is built from — shown both as source hubs and as
-  // individual chips so "what data drives the decision" is visible.
-  const wsss = {
-    id: 'WSSS', x: 170, y: 115, color: '#38bdf8',
-    label: 'WSSS METAR', sub: 'aviationweather.gov · temp + 24h',
-    val: f.wsss_current_temp != null ? f.wsss_current_temp : null,
-  };
-  const gov = {
-    id: 'GOV', x: 170, y: 335, color: '#2dd4bf',
-    label: 'data.gov.sg', sub: '12 raintel APIs',
-    val: f.rain_station_ratio != null ? (f.rain_station_ratio * 100) : null,
-  };
+  // ---------- All 26 live features, grouped into 4 source categories ----------
+  // Each feature is [key, formatted value, active]. Stacked vertically so the
+  // whole feature vector is visible, not just a slice.
+  const has = v => v != null;
+  const num = (v, d = 2) => (has(v) ? Number(v).toFixed(d) : '·');
+  const sign = v => (has(v) ? (v > 0 ? '+' : '') + Number(v).toFixed(1) : '·');
+  const stormTxt = f.wsss_storm_txt ? 'THUNDER' : (has(f.wsss_storm_txt) ? 'clear' : '·');
+  const rainDist = f.rain_dist_to_changi_km != null ? num(f.rain_dist_to_changi_km, 1) + 'km' : '·';
+  const storm2hr = f.changi_forecast_storm ? 'YES' : (has(f.changi_forecast_storm) ? 'no' : '·');
 
-  const wChips = [
-    { k: 'TEMP', v: f.wsss_current_temp != null ? f.wsss_current_temp.toFixed(2) + '°' : '·', a: f.wsss_current_temp != null },
-    { k: 'DEWP', v: f.wsss_dewp != null ? f.wsss_dewp.toFixed(2) + '°' : '·', a: f.wsss_dewp != null },
-    { k: 'WIND', v: f.wsss_wspd != null ? f.wsss_wspd.toFixed(2) + 'kt' : '·', a: f.wsss_wspd != null },
-    { k: 'CLOUD', v: f.wsss_total_cloud_oktas != null ? f.wsss_total_cloud_oktas.toFixed(0) + '/8' : '·', a: f.wsss_total_cloud_oktas != null },
-  ];
-  const gChips = [
-    { k: 'RAIN', v: f.rain_station_ratio != null ? (f.rain_station_ratio * 100).toFixed(2) + '%' : '·', a: f.rain_station_ratio != null },
-    { k: 'UV', v: f.uv_index != null ? f.uv_index.toFixed(2) : '·', a: f.uv_index != null },
-    { k: 'LIGHT', v: f.lightning_strike_count != null ? String(f.lightning_strike_count) : '·', a: f.lightning_strike_count != null },
-    { k: 'FCST', v: f.changi_forecast_storm ? 'storm' : 'clear', a: !!f.changi_forecast_storm },
+  const bands = [
+    { name: 'WSSS METAR', color: '#38bdf8', y: 50, h: 128, items: [
+      ['Temp',     num(f.wsss_current_temp) + '°',                        has(f.wsss_current_temp), 'Temp'],
+      ['Max',      num(f.wsss_todays_max_so_far) + '°',                   has(f.wsss_todays_max_so_far), 'Max today'],
+      ['Dewp',     num(f.wsss_dewp) + '°',                                has(f.wsss_dewp), 'Dewpoint'],
+      ['Wind',     num(f.wsss_wspd, 1) + 'kt',                            has(f.wsss_wspd), 'Wind'],
+      ['DPD',      num(f.wsss_dpd, 1) + '°',                              has(f.wsss_dpd), 'DPD'],
+      ['RH',       num(f.wsss_rh, 1) + '%',                               has(f.wsss_rh), 'RH'],
+      ['Altim',    num(f.wsss_altim, 0) + 'hPa',                          has(f.wsss_altim), 'Altimeter'],
+      ['Dir',      num(f.wsss_wdir, 0) + '°',                             has(f.wsss_wdir), 'Wind dir'],
+      ['Visib',    num(f.wsss_visib_num, 1) + 'km',                       has(f.wsss_visib_num), 'Visib'],
+      ['WX',       stormTxt,                                              !!f.wsss_storm_txt, 'Storm txt'],
+      ['Cloud',    num(f.wsss_total_cloud_oktas, 0) + '/8',               has(f.wsss_total_cloud_oktas), 'Cloud'],
+      ['LoCld',    num(f.wsss_low_cloud_ft, 0) + 'ft',                    has(f.wsss_low_cloud_ft), 'Low cloud'],
+      ['dP3h',     sign(f.wsss_press_trend_3h),                           has(f.wsss_press_trend_3h), 'Press 3h'],
+      ['dT3h',     sign(f.wsss_temp_ramp_3h),                             has(f.wsss_temp_ramp_3h), 'Ramp 3h'],
+      ['Stale',    num(f.minutes_since_last_metar, 0) + 'm',              has(f.minutes_since_last_metar), 'Stale'],
+    ]},
+    { name: 'data.gov.sg', color: '#2dd4bf', y: 190, h: 62, items: [
+      ['UV',         num(f.uv_index, 1),                                    has(f.uv_index), 'UV'],
+      ['WBGT',       num(f.wbgt_max, 1) + '°',                              has(f.wbgt_max), 'WBGT max'],
+      ['Ltng',       has(f.lightning_strike_count) ? String(f.lightning_strike_count) : '·', has(f.lightning_strike_count), 'Lightning'],
+      ['Rain %',     has(f.rain_station_ratio) ? (f.rain_station_ratio * 100).toFixed(0) + '%' : '·', has(f.rain_station_ratio), 'Rain %'],
+      ['Hotspot',    has(f.rain_hotspot_ratio) ? (f.rain_hotspot_ratio * 100).toFixed(0) + '%' : '·', has(f.rain_hotspot_ratio), 'Hotspot'],
+      ['RainD',      rainDist,                                              f.rain_dist_to_changi_km != null, 'Rain dist'],
+      ['2hr',        storm2hr,                                              !!f.changi_forecast_storm, '2hr storm'],
+    ]},
+    { name: 'SPATIAL', color: '#9085e9', y: 264, h: 62, items: [
+      ['Changi',  num(f.spatial_changi_prox_temp) + '°',                has(f.spatial_changi_prox_temp), 'Changi prox'],
+      ['IslMax',  num(f.spatial_max_temp) + '°',                        has(f.spatial_max_temp), 'Island max'],
+      ['Spread',  num(f.spatial_temp_spread) + '°',                     has(f.spatial_temp_spread), 'Spread'],
+    ]},
+    { name: 'DERIVED', color: '#f59e0b', y: 338, h: 62, items: [
+      ['Hour',   num(f.hour_of_day, 0) + ':00 SGT',                    has(f.hour_of_day), 'Hour'],
+    ]},
   ];
 
+  // Engine spine (vertical, right side): features -> model -> market -> decision
   const stages = [
-    { label: 'FEATURES', color: '#9085e9', x: 640,
-      value: nFeat > 0 ? nFeat + ' signals' : '···', sub: 'feature vector',
-      on: nFeat > 0 },
-    { label: 'MODEL', color: '#3987e5', x: 830,
-      value: pred.mean_c != null ? (pred.mean_c.toFixed(2) + '±' + (pred.std_c != null ? pred.std_c.toFixed(2) : '·')) : '···',
+    { label: 'FEATURES', color: '#9085e9', y: 150,
+      value: nFeat > 0 ? nFeat + ' signals' : '···', sub: 'feature vector', on: nFeat > 0 },
+    { label: 'MODEL', color: '#3987e5', y: 330,
+      value: pred.mean_c != null ? num(pred.mean_c) + '±' + num(pred.std_c) : '···',
       sub: 'max-temp dist', on: pred.mean_c != null },
-    { label: 'MARKET', color: '#f59e0b', x: 995,
+    { label: 'MARKET', color: '#f59e0b', y: 510,
       value: top != null ? '±' + (top.edge >= 0 ? '+' : '') + (top.edge * 100).toFixed(2) + '%' : '···',
-      sub: top != null ? 'vs live ask' : 'bracket ask',
-      on: !!top },
-    { label: 'DECISION', color: '#199e70', x: 1135,
+      sub: top != null ? 'vs live ask' : 'bracket ask', on: !!top },
+    { label: 'DECISION', color: '#199e70', y: 655,
       value: top ? (top.action || 'signal') : 'no edge',
       sub: top ? (top.stake_usd ? '$' + top.stake_usd.toFixed(2) : 'hold/scout') : 'awaiting edge',
       on: !!top },
@@ -174,77 +194,85 @@ function renderDataFlow(data) {
     </linearGradient>
   </defs>`;
 
-  svg += `<text x="20" y="30" fill="var(--muted-ink)" font-size="10" letter-spacing="2.5" font-weight="600">INPUTS</text>`;
-  svg += `<text x="980" y="30" text-anchor="end" fill="var(--muted-ink)" font-size="10" letter-spacing="2.5" font-weight="600">ENGINE</text>`;
+  svg += `<text x="20" y="30" fill="var(--muted-ink)" font-size="10" letter-spacing="2.5" font-weight="600">LIVE FEATURES</text>`;
+  svg += `<text x="${SPINE_X + 60}" y="30" text-anchor="end" fill="var(--muted-ink)" font-size="10" letter-spacing="2.5" font-weight="600">ENGINE</text>`;
 
-  // --- Data source hubs + their live channels ---
-  const hubs = [wsss, gov];
-  hubs.forEach(h => {
-    const flash = _flowPrev['hub_' + h.id] !== (h.val != null ? h.val.toFixed(2) : '·');
-    if (flash) _flowPrev['hub_' + h.id] = h.val != null ? h.val.toFixed(2) : '·';
-    svg += `<g transform="translate(${h.x},${h.y})" class="flow-stage"><g class="${flash ? 'stage-flash' : ''}">
-      <circle r="30" fill="${h.color}" opacity="${h.val != null ? 0.05 : 0.015}"/>
-      <circle r="30" fill="rgba(10,12,16,0.92)" stroke="${h.color}" stroke-width="1.6"/>
-      <circle r="30" fill="none" stroke="${h.color}" stroke-width="1" opacity="0.5">
-        <animate attributeName="r" values="30;46" dur="2.6s" repeatCount="indefinite"/>
-        <animate attributeName="opacity" values="0.5;0" dur="2.6s" repeatCount="indefinite"/>
-      </circle>
-      <g transform="translate(0,-9)">${flowIcon(h.id, h.color)}</g>
-      <text y="46" text-anchor="middle" fill="var(--secondary-ink)" font-size="9.5" letter-spacing="1.5" font-weight="600">${h.label}</text>
-      <text y="60" text-anchor="middle" fill="${h.val != null ? h.color : 'var(--muted-ink)'}" font-size="12" font-weight="600"
-        font-family="JetBrains Mono, monospace">${h.val != null ? h.val.toFixed(2) : '···'}</text>
-    </g></g>`;
+  // ---------- Category bands, each with all its live feature chips ----------
+  bands.forEach(b => {
+    svg += `<rect x="40" y="${b.y}" width="750" height="${b.h}" rx="14"
+      fill="${b.color}" fill-opacity="0.04" stroke="${b.color}" stroke-opacity="0.16"/>`;
+    svg += `<circle cx="58" cy="${b.y + 22}" r="4" fill="${b.color}"/>`;
+    svg += `<text x="72" y="${b.y + 26}" fill="var(--primary-ink)" font-size="10" font-weight="600"
+      letter-spacing="1.5">${b.name}</text>`;
+    svg += `<text x="782" y="${b.y + 26}" text-anchor="end" fill="var(--muted-ink)" font-size="9"
+      font-family="JetBrains Mono, monospace">${b.items.length} signals</text>`;
+
+    let x = 58, cy = b.y + 42;
+    b.items.forEach((it, i) => {
+      const w = 96;
+      if (x + w > 40 + 750 - 12) { x = 58; cy += 26; }
+      const key = b.name + '::' + it[0];
+      const flash = _flowPrev[key] !== it[1];
+      if (flash) _flowPrev[key] = it[1];
+      svg += `<g class="${flash ? 'stage-flash' : ''}">${flowChip(x, cy, it[0], it[1], b.color, it[2], it[3])}</g>`;
+      x += w + 6;
+    });
   });
 
-  // Live channel chips beside each hub — the actual data feeding the engine.
-  wChips.forEach((c, i) => { svg += flowChip(222 + i * 92, wsss.y - 10, c.k, c.v, wsss.color, c.a); });
-  gChips.forEach((c, i) => { svg += flowChip(222 + i * 92, gov.y - 10, c.k, c.v, gov.color, c.a); });
-
-  // --- Connectors (each labeled with what it carries) ---
-  const flows = [
-    { d: `M200,115 C 260,36 560,36 608,200`, to: '#38bdf8', tag: 'metar: temp·dewp·wind·cloud', tagAt: [360, 40], dur: 2.4 },
-    { d: `M200,335 C 260,414 560,414 608,242`, to: '#2dd4bf', tag: 'rain·uv·lightning·forecast', tagAt: [350, 402], dur: 2.4 },
-    { d: `M672,220 C 718,190 748,250 796,220`, to: '#3987e5', tag: 'n signals → dist', tagAt: [716, 238], dur: 2.2 },
-    { d: `M862,220 C 908,190 938,250 959,220`, to: '#f59e0b', tag: 'p(bracket) vs ask', tagAt: [900, 238], dur: 2.0 },
-    { d: `M1027,220 C 1064,196 1098,244 1101,220`, to: '#199e70', tag: 'edge · kelly · window', tagAt: [1050, 240], dur: 1.8 },
+  // ---------- Connectors: each band feeds into the FEATURES node ----------
+  const feeds = [
+    { y: 114, dur: 2.6 },   // WSSS band center
+    { y: 221, dur: 2.4 },   // data.gov.sg
+    { y: 295, dur: 2.2 },   // spatial
+    { y: 369, dur: 2.0 },   // derived
   ];
-  flows.forEach((fl, i) => {
-    const pid = 'fp' + i;
-    svg += `<path id="${pid}" d="${fl.d}" fill="none" stroke="rgba(120,140,180,0.10)" stroke-width="2"/>`;
-    svg += `<path d="${fl.d}" fill="none" stroke="url(#flowLine)" stroke-width="1.8" stroke-linecap="round"
-      stroke-dasharray="1 14" stroke-dashoffset="6" opacity="0.85">
-      <animate attributeName="stroke-dashoffset" from="0" to="-30" dur="${fl.dur}s" repeatCount="indefinite"/>
-    </path>`;
+  feeds.forEach((fd, i) => {
+    const d = `M792,${fd.y} C 900,${fd.y} 910,150 1020,150`;
+    const pid = 'feed' + i;
+    svg += `<path id="${pid}" d="${d}" fill="none" stroke="rgba(120,140,180,0.10)" stroke-width="2"/>`;
+    svg += `<path d="${d}" fill="none" stroke="url(#flowLine)" stroke-width="1.6" stroke-linecap="round"
+      stroke-dasharray="1 12" stroke-dashoffset="4" opacity="0.8">
+      <animate attributeName="stroke-dashoffset" from="0" to="-26" dur="${fd.dur}s" repeatCount="indefinite"/></path>`;
     for (let p = 0; p < 2; p++) {
-      svg += `<circle r="${p === 0 ? 2.2 : 1.4}" fill="${fl.to}" opacity="0.65">
-        <animateMotion dur="${(fl.dur * 2.1).toFixed(1)}s" repeatCount="indefinite" begin="${p * 0.7}s">
-          <mpath href="#${pid}"/>
-        </animateMotion>
-      </circle>`;
-      svg += `<circle r="1" fill="#fff" opacity="0.8">
-        <animateMotion dur="${(fl.dur * 2.1).toFixed(1)}s" repeatCount="indefinite" begin="${p * 0.7}s">
-          <mpath href="#${pid}"/>
-        </animateMotion>
-      </circle>`;
+      svg += `<circle r="${p === 0 ? 2.2 : 1.2}" fill="${bands[i].color}" opacity="0.7">
+        <animateMotion dur="${(fd.dur * 2.2).toFixed(1)}s" repeatCount="indefinite" begin="${p * 0.8}s">
+          <mpath href="#${pid}"/></animateMotion></circle>`;
+      svg += `<circle r="1" fill="#fff" opacity="0.7">
+        <animateMotion dur="${(fd.dur * 2.2).toFixed(1)}s" repeatCount="indefinite" begin="${p * 0.8}s">
+          <mpath href="#${pid}"/></animateMotion></circle>`;
     }
-    svg += `<text x="${fl.tagAt[0]}" y="${fl.tagAt[1]}" text-anchor="middle" fill="var(--muted-ink)" font-size="8.5"
-      opacity="0.85" font-family="JetBrains Mono, monospace">${fl.tag}</text>`;
   });
 
-  // --- Compute spine nodes ---
+  // ---------- Vertical spine connectors (down through the engine) ----------
+  const vlinks = [
+    { y1: 186, y2: 294, dur: 1.9 },
+    { y1: 366, y2: 474, dur: 1.7 },
+    { y1: 546, y2: 619, dur: 1.5 },
+  ];
+  vlinks.forEach((ln, i) => {
+    const d = `M${SPINE_X},${ln.y1} L${SPINE_X},${ln.y2}`;
+    const pid = 'vlink' + i;
+    svg += `<path id="${pid}" d="${d}" fill="none" stroke="rgba(120,140,180,0.10)" stroke-width="2"/>`;
+    svg += `<path d="${d}" fill="none" stroke="url(#flowLine)" stroke-width="1.6" stroke-linecap="round"
+      stroke-dasharray="1 12" stroke-dashoffset="4" opacity="0.8">
+      <animate attributeName="stroke-dashoffset" from="0" to="-26" dur="${ln.dur}s" repeatCount="indefinite"/></path>`;
+    for (let p = 0; p < 2; p++) {
+      svg += `<circle r="${p === 0 ? 2.2 : 1.2}" fill="${stages[i + 1].color}" opacity="0.7">
+        <animateMotion dur="${(ln.dur * 2.2).toFixed(1)}s" repeatCount="indefinite" begin="${p * 0.8}s">
+          <mpath href="#${pid}"/></animateMotion></circle>`;
+    }
+  });
+
+  // ---------- Engine spine nodes ----------
   stages.forEach((s, i) => {
-    const x = s.x;
     const flash = _flowPrev[s.label] !== s.value;
     if (flash) _flowPrev[s.label] = s.value;
-
-    svg += `<g transform="translate(${x},${SPINE})" class="flow-stage">
-      <g class="${flash ? 'stage-flash' : ''}">`;
+    svg += `<g transform="translate(${SPINE_X},${s.y})" class="flow-stage"><g class="${flash ? 'stage-flash' : ''}">`;
     svg += `<circle r="${R + 14}" fill="${s.color}" opacity="${s.on ? 0.05 : 0.015}"/>`;
     svg += `<circle r="${R}" fill="rgba(10,12,16,0.92)" stroke="${s.color}" stroke-width="1.6"/>`;
     svg += `<circle r="${R}" fill="none" stroke="${s.color}" stroke-width="1" opacity="0.5">
       <animate attributeName="r" values="${R};${R + 18}" dur="2.6s" repeatCount="indefinite" begin="${i * 0.4}s"/>
-      <animate attributeName="opacity" values="0.5;0" dur="2.6s" repeatCount="indefinite" begin="${i * 0.4}s"/>
-    </circle>`;
+      <animate attributeName="opacity" values="0.5;0" dur="2.6s" repeatCount="indefinite" begin="${i * 0.4}s"/></circle>`;
     svg += `<g transform="translate(0,-10)">${flowIcon(s.label, s.color)}</g>`;
     svg += `<text y="${R + 16}" text-anchor="middle" fill="var(--secondary-ink)" font-size="10" letter-spacing="2" font-weight="600">${s.label}</text>`;
     svg += `<text y="${R + 32}" text-anchor="middle" fill="${s.on ? s.color : 'var(--muted-ink)'}" font-size="13" font-weight="600"
@@ -624,8 +652,16 @@ function renderBrackets(event) {
   els.bracketsBody.innerHTML = trades.map(t => {
     const stake = t.stake_usd != null ? '$' + Number(t.stake_usd).toFixed(2) : '—';
     const prob = t.prob != null ? (t.prob * 100).toFixed(2) + '%' : '—';
+    // Inline in the name cell on purpose — patchPrices indexes cells[2]/cells[3]
+    // for the yes/no price columns, so adding a column would break live patching.
+    const live = t.priced_from_live
+      ? `<span class="badge-live" data-source="ws" title="Priced from live WebSocket feed">LIVE</span>`
+      : `<span class="badge-live" data-source="metadata" title="Priced from Gamma metadata">META</span>`;
+    const skipReason = (t.action === 'SKIP' || t.action === 'NO_SIGNAL' || t.action === 'NO_TRADE') && t.reason
+      ? `<div style="margin-top:3px;font-size:0.64rem;color:var(--muted-ink);font-family:var(--font-mono);max-width:200px;white-space:normal;">${escapeHtml(t.reason)}</div>`
+      : '';
     return `<tr>
-      <td>${escapeHtml(t.bracket || '')}</td>
+      <td>${escapeHtml(t.bracket || '')}${live}${skipReason}</td>
       <td class="num">${prob}</td>
       <td class="num yes">${t.yes_price != null ? '¢' + (t.yes_price * 100).toFixed(2) : '—'}</td>
       <td class="num no">${t.no_price != null ? '¢' + (t.no_price * 100).toFixed(2) : '—'}</td>
@@ -701,7 +737,19 @@ async function loadDashboard() {
     // Prediction
     if (data.prediction) {
       els.predValue.textContent = data.prediction.mean_c?.toFixed(2) + '°C' || '—';
-      els.predMeta.textContent = `±${data.prediction.std_c?.toFixed(2)}°C · hour ${data.prediction.hour_of_day ?? '—'} SGT`;
+      const ss = data.prediction.signal_state;
+      const banner = ss
+        ? `<span class="signal-banner" data-status="${escapeHtml(ss.status)}">${escapeHtml(ss.label)}</span>`
+        : '';
+      const tuning = data.prediction.tuning;
+      const tuneNote = tuning && tuning.source === 'learned'
+        ? `<span style="color:var(--success)"> · self-tuned</span>` +
+          (tuning.n_settled != null ? ` (${tuning.n_settled} days)` : '') +
+          (tuning.bias != null && tuning.bias !== 0 ? ` bias ${tuning.bias > 0 ? '+' : ''}${tuning.bias.toFixed(2)}°C` : '')
+        : (tuning && tuning.n_settled != null && tuning.n_settled > 0
+            ? `<span style="color:var(--muted-ink)"> · learning (${tuning.n_settled}/3 days)</span>`
+            : '');
+      els.predMeta.innerHTML = `±${data.prediction.std_c?.toFixed(2)}°C · hour ${data.prediction.hour_of_day ?? '—'} SGT${tuneNote}${banner ? '<br>' + banner : ''}`;
       renderPredictionChart(data.prediction);
     }
 

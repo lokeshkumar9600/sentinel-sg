@@ -8,6 +8,10 @@ const els = {
   perfMae: $('ps-mae'),
   perfBias: $('ps-bias'),
   perfHit: $('ps-hit'),
+  perfLockon: $('ps-lockon'),
+  perfHeld: $('ps-held'),
+  epTime: $('ep-time'),
+  epBody: $('ep-body'),
   body: $('history-body'),
   filters: $('history-filters'),
 };
@@ -57,6 +61,76 @@ async function loadPerformance() {
     }
   } catch (e) {
     els.perfMae.textContent = els.perfBias.textContent = els.perfHit.textContent = '—';
+  }
+}
+
+// --- Early-prediction analysis (lock-on speed) ---
+function fmtDay(dateStr) {
+  if (!dateStr) return '—';
+  const m = String(dateStr).match(/([A-Za-z]+)-(\d+)-(\d{4})/);
+  if (!m) return escapeHtml(dateStr);
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const mi = months.indexOf(m[1].slice(0, 3));
+  return (mi >= 0 ? months[mi] : m[1].slice(0, 3)) + ' ' + m[2] + ', ' + m[3];
+}
+
+function fmtHour(h) {
+  // 14 -> "14:00 SGT"
+  if (h == null || !isFinite(h)) return '—';
+  return String(Math.round(h)).padStart(2, '0') + ':00 SGT';
+}
+
+async function loadEarlyPrediction() {
+  try {
+    const d = await (await fetch('/api/early_prediction')).json();
+    const summary = d.summary || {};
+    const days = d.days || [];
+
+    // Summary tiles
+    els.perfDays.textContent = summary.days_analyzed != null ? summary.days_analyzed : '—';
+    els.perfLockon.textContent = summary.avg_lock_on_hour != null
+      ? fmtHour(summary.avg_lock_on_hour).replace(':00 SGT', '') + 'h'
+      : '—';
+    els.perfHeld.textContent = summary.pct_held_after_lock_on != null
+      ? (summary.pct_held_after_lock_on * 100).toFixed(0) + '%'
+      : '—';
+    els.epTime.textContent = summary.days_analyzed != null
+      ? summary.days_analyzed + (summary.days_analyzed === 1 ? ' day analyzed' : ' days analyzed')
+      : '—';
+
+    if (!days.length) {
+      els.epBody.innerHTML = '<tr><td colspan="7" class="emptystate">No settled days with timeseries snapshots yet — lock-on analysis grows each day as the analytics store accrues minute-by-minute predictions.</td></tr>';
+      return;
+    }
+
+    els.epBody.innerHTML = days.map(r => {
+      const lockHour = r.lock_on_hour != null ? fmtHour(r.lock_on_hour) : '<span class="text--muted">never</span>';
+      const held = r.held == null
+        ? '<span class="text--muted">—</span>'
+        : r.held
+          ? '<span style="color:var(--success)">yes</span>'
+          : '<span style="color:var(--danger)">no — wobbled</span>';
+      const pLock = r.confidence_at_lock_in != null
+        ? (r.confidence_at_lock_in * 100).toFixed(1) + '%'
+        : '—';
+      const pEnd = r.winner_prob_end != null
+        ? (r.winner_prob_end * 100).toFixed(1) + '%'
+        : '—';
+      const note = r.note ? ` <span class="text--muted" style="font-size:0.66rem">(${escapeHtml(r.note)})</span>` : '';
+      return `<tr>
+        <td>${fmtDay(r.date)}${note}</td>
+        <td>${r.actual_max != null ? r.actual_max.toFixed(1) + '°C' : '<span class="text--muted">—</span>'}</td>
+        <td>${escapeHtml(r.winner_bracket || '—')}</td>
+        <td>${lockHour}</td>
+        <td>${held}</td>
+        <td class="num">${pLock}</td>
+        <td class="num">${pEnd}</td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    els.perfLockon.textContent = '—';
+    els.perfHeld.textContent = '—';
+    els.epBody.innerHTML = `<tr><td colspan="7" class="emptystate">Early-prediction analysis unavailable: ${escapeHtml(e.message)}</td></tr>`;
   }
 }
 
@@ -124,6 +198,8 @@ els.filters.addEventListener('click', (e) => {
 
 // --- Boot ---
 loadPerformance();
+loadEarlyPrediction();
 loadHistory();
 setInterval(loadHistory, POLL * 1000);
 setInterval(loadPerformance, POLL * 2000);
+setInterval(loadEarlyPrediction, POLL * 2000);

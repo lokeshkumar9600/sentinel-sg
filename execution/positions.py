@@ -13,7 +13,7 @@ the book, so every access goes through a lock (mirrors LiveFeed).
 import threading
 import time
 
-from data.config import STOP_LOSS_PCT, TAKE_PROFIT_PCT
+from data.config import FAIR_VALUE_EXIT_RATIO, STOP_LOSS_PCT, STOP_COOLDOWN_SECONDS, TAKE_PROFIT_PCT
 
 # Actions a position can be in.
 HOLD = "HOLD"
@@ -34,6 +34,9 @@ class PositionBook:
     def __init__(self):
         self._lock = threading.Lock()
         self._book: dict[str, dict] = {}
+        # Anti-churn: map of bracket+side -> epoch when the last STOP occurred.
+        # After a stop, re-entry is blocked for STOP_COOLDOWN_SECONDS.
+        self._cooldowns: dict[str, float] = {}
 
     def _key(self, bracket: str, side: str) -> str:
         return f"{bracket}|{side}"
@@ -108,6 +111,47 @@ class PositionBook:
                 if key in self._book:
                     self._book[key]["action"] = RESOLVED_OR_STALE
                     self._book[key]["action_at"] = time.time()
+
+    def manage_guard_rails(self, fair_values: dict, df: float | None = None) -> None:
+        """Model-driven guard rails, applied on top of the P&L-band management.
+
+        `fair_values` maps "bracket|side" -> the model's fair value for THAT side
+        (YES: P(bracket); NO: 1 - P(bracket)). Called by the server on each price
+        tick so a position is managed on the MODEL's re-rating, not only after the
+        market has already repriced (which is what lets a collapsing bid gap
+        through the P&L stop).
+
+        Guard rail 1 (fair-value exit): a losing position is exited the moment the
+        model's live fair value for the held side drops to <= entry * FAIR_VALUE_EXIT_RATIO.
+        Guard rail 2 (lockout harvest): once diurnal heating is essentially done
+        (df >= 0.97) a green position is taken to profit — the day is settled, so
+        holding a winner is just giving edge back.
+        """
+        now = time.time()
+        with self._lock:
+            for key, pos in list(self._book.items()):
+                if pos["action"] in (TAKE_PROFIT, STOP, RESOLVED_OR_STALE):
+                    continue
+                fv = fair_values.get(key)
+                entry = pos["entry_price"]
+                side = pos["side"]
+                pnl_pct = pos.get("pnl_pct", 0.0)
+                # Guard rail 1: model de-rating -> exit a loser
+                if fv is not None and pnl_pct < 0:
+                    if fv <= entry * FAIR_VALUE_EXIT_RATIO:
+                        pos["action"] = STOP
+                        pos["action_at"] = now
+                        pos["reason"] = (
+                            f"Model de-rating: {side} fair {fv:.3f} "
+                            f"<= entry {entry:.3f} x {FAIR_VALUE_EXIT_RATIO}"
+                        )
+                        continue
+                # Guard rail 2: lockout harvest on green positions
+                if df is not None and df >= 0.97 and pnl_pct > 0:
+                    pos["action"] = TAKE_PROFIT
+                    pos["action_at"] = now
+                    pos["reason"] = f"Lockout harvest (df={df:.2f})"
+                    continue
 
     def settle_actions(self) -> list[dict]:
         """Return any positions currently in an exit action (TAKE_PROFIT/STOP/

@@ -85,6 +85,12 @@ def get_history(limit: int = 50) -> list:
     return history[-limit:][::-1]  # newest first
 
 
+def get_all_history() -> list:
+    """Return the full history, oldest first (chronological)."""
+    with _lock:
+        return _load()
+
+
 def clear_history() -> None:
     """Wipe all history (e.g. at start of new trading day)."""
     with _lock:
