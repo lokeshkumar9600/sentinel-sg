@@ -169,7 +169,8 @@ def _refresh_book_from_feed(snapshot: list[dict]):
     closed = book.settle_actions()
     for c in closed:
         log_exit(c["bracket"], c["side"], c["exit_price"], c["pnl_pct"],
-                 c.get("reason") or c["closed_action"])
+                 c.get("reason") or c["closed_action"],
+                 entry_price=c.get("entry_price"))
         _accumulate_day_loss(c)
 
 

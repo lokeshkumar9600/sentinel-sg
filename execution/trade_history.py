@@ -73,13 +73,14 @@ def log_entry(bracket: str, side: str, entry_price: float, stake_usd: float, edg
         pass
 
 
-def log_exit(bracket: str, side: str, exit_price: float, pnl_pct: float, reason: str = "") -> None:
+def log_exit(bracket: str, side: str, exit_price: float, pnl_pct: float, reason: str = "",
+             entry_price: float | None = None) -> None:
     # Map exit reason to signal
     signal = "TAKE_PROFIT" if pnl_pct >= 0 else "STOP"
-    log_signal(signal, bracket, side, None, exit_price, 0.0, 0.0, pnl_pct, reason)
+    log_signal(signal, bracket, side, entry_price, exit_price, 0.0, 0.0, pnl_pct, reason)
     try:
         from execution.notifications import notify_exit
-        notify_exit(bracket, side, None, exit_price, pnl_pct, signal)
+        notify_exit(bracket, side, entry_price, exit_price, pnl_pct, signal)
     except Exception:  # noqa: BLE001 — notifications must never break the log
         pass
 

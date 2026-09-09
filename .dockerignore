@@ -1,0 +1,27 @@
+# Secrets — never bake into the image
+.env
+.env.*
+!.env.example
+
+# Runtime data (created in the mounted volume at runtime)
+data/*.json
+data/*.db
+data/__pycache__/
+
+# Python
+__pycache__/
+*.pyc
+
+# Git / CI
+.git/
+.github/
+.gitignore
+
+# Tooling
+.idea/
+.vscode/
+.DS_Store
+
+# Docs / tests that the runtime image doesn't need
+tests/
+*.md

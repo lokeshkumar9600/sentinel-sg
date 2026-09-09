@@ -1,18 +1,39 @@
-version: '3.8'
+version: "3.9"
+
+# Minimal-setup Docker deployment.
+#
+#   cp .env.example .env      # fill in your values (email/webhook — see README)
+#   docker compose up --build
+#
+# The dashboard is served at http://localhost:8000
+#
+# data/ (trade history, prediction snapshots, calibration) is persisted in the
+# named volume `sentinel-data`, so state survives container rebuilds/restarts.
+# A named volume (not a ./data bind mount) keeps appuser ownership correct on
+# Linux — the container runs as a non-root user and shouldn't depend on host uid
+# ownership.
+#
+# The health check hits /api/health, which is exempt from the API rate limiter.
 
 services:
   sentinel:
     build: .
+    container_name: sentinel-sg
+    restart: unless-stopped
     ports:
       - "8000:8000"
+    env_file:
+      - .env
     environment:
-      - DATA_GOV_API_KEY=${DATA_GOV_API_KEY}
+      PYTHONUNBUFFERED: "1"
     volumes:
-      - ./data:/app/data
-    restart: unless-stopped
+      - sentinel-data:/app/data
     healthcheck:
       test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/api/health', timeout=5)"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 20s
+
+volumes:
+  sentinel-data:

@@ -10,7 +10,7 @@ services:
     region: singapore          # closest to WSSS/Changi and Polymarket edge
     buildCommand: python3 -m pip install -r requirements.txt
     startCommand: python3 -m uvicorn server:app --host 0.0.0.0 --port $PORT
-    healthCheckPath: /api/prices
+    healthCheckPath: /api/health
     envVars:
       - key: PYTHON_VERSION
         value: "3.11.6"        # matches local runtime; also pinned in .python-version
