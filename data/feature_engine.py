@@ -14,7 +14,7 @@ CHANGI_LON = 103.9915
 SGT = ZoneInfo("Asia/Singapore")
 
 # Cloud-cover -> eighths, for summing total cloud amount from METAR layers.
-_COVER_OKTA = {"CLR": 0, "SKC": 0, "FEW": 2, "SCT": 4, "BKN": 7, "OVC": 8, "OVX": 8}
+_COVER_OKTA = {"CLR": 0, "SKC": 0, "FEW": 2, "SCT": 4, "BKN": 7, "OVC": 8, "OVX": 8, "VV": 8}
 _THUNDER_TOKENS = ("thunder", "tsra", "tssn", "shower", "rain", "drizzle", "+tsra")
 _RAIN_HOTSPOT_MM = 1.0  # a station counts as a rain "hotspot" above this (mm)
 

@@ -29,21 +29,20 @@ def _age_penalty(minutes_since_metar: float | None, forecast_age_min: float | No
     - If forecast is > FORECAST_MAX_AGE_MIN minutes old, decay also applies.
     - Both decay monotonically with age, asymptoting at AGE_MAX_AS_MULT.
     """
+    SCALE = 60.0  # decay scale in minutes (shared)
+
     # METAR age component
     metar_penalty = 1.0
     if minutes_since_metar is not None and minutes_since_metar > AGE_MIN:
-        # Linear decay from 1.0 at AGE_MIN to AGE_MAX_AS_MULT at large ages
-        # Using a smooth curve: 1 - (1 - floor) * (age - AGE_MIN) / (age - AGE_MIN + scale)
-        scale = 60.0  # decay scale in minutes
         excess = minutes_since_metar - AGE_MIN
-        metar_penalty = 1.0 - (1.0 - AGE_MAX_AS_MULT) * (excess / (excess + scale))
+        metar_penalty = 1.0 - (1.0 - AGE_MAX_AS_MULT) * (excess / (excess + SCALE))
         metar_penalty = max(AGE_MAX_AS_MULT, min(1.0, metar_penalty))
 
     # Forecast age component (if available)
     forecast_penalty = 1.0
     if forecast_age_min is not None and forecast_age_min > FORECAST_MAX_AGE_MIN:
         excess = forecast_age_min - FORECAST_MAX_AGE_MIN
-        forecast_penalty = 1.0 - (1.0 - AGE_MAX_AS_MULT) * (excess / (excess + scale))
+        forecast_penalty = 1.0 - (1.0 - AGE_MAX_AS_MULT) * (excess / (excess + SCALE))
         forecast_penalty = max(AGE_MAX_AS_MULT, min(1.0, forecast_penalty))
 
     # Combine: the more restrictive (lower) penalty wins
@@ -61,13 +60,13 @@ def _time_of_day_penalty(hour_of_day: float | None) -> float:
     if hour_of_day is None:
         return 1.0  # neutral if unknown
 
-    # Cosine window: cos^2 goes from 0 to 1; we map [0, 1] -> [0.6, 1.0]
+    # Cosine window: cos^2(phase/2) goes from 0 to 1 over 24h; we map [0, 1] -> [0.6, 1.0]
     # At HOUR_PEAK, phase = 0 -> cos(0) = 1 -> factor = 1.0
-    # At HOUR_PEAK +/- 12h, phase = pi -> cos(pi) = -1 -> factor = 0.6
+    # At HOUR_PEAK +/- 12h, phase = pi -> cos(pi/2) = 0 -> factor = 0.6
     phase = 2.0 * pi * (hour_of_day - HOUR_PEAK) / 24.0
-    cos_sq = cos(phase) ** 2
-    # Map cos^2 in [0, 1] to [1 - HOUR_AMPLITUDE, 1] = [0.6, 1.0]
-    return (1.0 - HOUR_AMPLITUDE) + HOUR_AMPLITUDE * cos_sq
+    cos_sq_half = cos(phase / 2.0) ** 2
+    # Map cos^2(phase/2) in [0, 1] to [1 - HOUR_AMPLITUDE, 1] = [0.6, 1.0]
+    return (1.0 - HOUR_AMPLITUDE) + HOUR_AMPLITUDE * cos_sq_half
 
 
 def compute_storm_timing_factor(features: dict) -> dict:

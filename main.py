@@ -11,6 +11,7 @@ from data.ingestion import fetch_all_data_gov, fetch_wsss_metar_history
 from data.config import STORM_W_FORECAST, STORM_W_METAR_TEXT, STORM_W_LIGHTNING, STORM_W_RAIN, STORM_W_RAIN_DIST, CLIM_MEAN_DEFAULT, CLIM_SIGMA, SIGMA_RESIDUAL_FLOOR_C, TRADEABLE_HOURS_START, TRADEABLE_HOURS_END, MIN_LIVE_ASK, MAX_ASK_TO_TRADE, MORNING_BIAS_HOURS
 from execution.polymarket import fetch_event_raw, parse_markets_from_event, get_live_clob_price, parse_temperature_bounds
 from execution.kelly_sizer import calculate_bracket_probability, compute_effective_min_edge, compute_kelly_trade, size_portfolio
+from data.storm_timing import compute_storm_timing_factor, refine_storm_score
 
 SGT = ZoneInfo("Asia/Singapore")
 POLL_INTERVAL_SECONDS = 60
@@ -124,6 +125,9 @@ def _build_prediction_context(features: dict, storm: float, mu: float, sigma: fl
         ctx.append(f"storm score {storm:.2f} (suppressing peak)")
     elif storm > 0.1:
         ctx.append(f"storm score {storm:.2f} (mild suppression)")
+    # Storm timing
+    if timing:
+        ctx.append(f"storm age_pen={timing.get('storm_age_penalty', 1.0):.2f} time_pen={timing.get('time_of_day_penalty', 1.0):.2f}")
     # Diurnal
     hr = features.get("hour_of_day")
     if hr is not None:
@@ -155,6 +159,10 @@ def predict_daily_max_temp(features: dict) -> tuple[float, float]:
     hr = features.get("hour_of_day", 12)
 
     storm = _convection_storm_score(features)
+
+    # Apply temporal decay and diurnal convective cycle scaling to the storm score
+    timing = compute_storm_timing_factor(features)
+    storm = refine_storm_score(storm, timing)
 
     # --- mu: remaining warming capacity on a realistic diurnal curve ---
     # How much of the day's heating is still ahead determines how far the temp can
