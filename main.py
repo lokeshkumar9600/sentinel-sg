@@ -128,6 +128,14 @@ def _build_prediction_context(features: dict, storm: float, mu: float, sigma: fl
     # Storm timing
     if timing:
         ctx.append(f"storm age_pen={timing.get('storm_age_penalty', 1.0):.2f} time_pen={timing.get('time_of_day_penalty', 1.0):.2f}")
+    # Trend features
+    yest = features.get("yesterday_max_temp")
+    three = features.get("three_day_avg_max")
+    if yest is not None and three is not None:
+        ctx.append(f"trend: yest={yest:.1f} 3d_avg={three:.1f} dev={yest-three:.1f}")
+    delta_y = features.get("temp_delta_yesterday")
+    if delta_y is not None:
+        ctx.append(f"delta_vs_yest={delta_y:.1f}")
     # Diurnal
     hr = features.get("hour_of_day")
     if hr is not None:
@@ -158,6 +166,12 @@ def predict_daily_max_temp(features: dict) -> tuple[float, float]:
     stale_minutes = features.get("minutes_since_last_metar", 0.0)
     hr = features.get("hour_of_day", 12)
 
+    # --- Trend-aware forecasting using lag/rolling features ---
+    # These features provide day-over-day context that the physics model alone misses.
+    yesterday_max = features.get("yesterday_max_temp")
+    three_day_avg = features.get("three_day_avg_max")
+    temp_delta_yesterday = features.get("temp_delta_yesterday")
+
     storm = _convection_storm_score(features)
 
     # Apply temporal decay and diurnal convective cycle scaling to the storm score
@@ -181,6 +195,20 @@ def predict_daily_max_temp(features: dict) -> tuple[float, float]:
 
     ramp = features.get("wsss_temp_ramp_3h", 0.0) or 0.0
     projected += 0.15 * max(-2.0, min(2.0, ramp))     # short-term agreement bias
+
+    # Trend adjustment: if yesterday was hotter/cooler than the 3-day average,
+    # nudge the projection in that direction (momentum effect, bounded).
+    if yesterday_max is not None and three_day_avg is not None:
+        # yesterday deviation from 3-day trend (positive = yesterday hotter)
+        trend_dev = yesterday_max - three_day_avg
+        # Current temp deviation from yesterday's max (positive = already warmer)
+        delta_yest = temp_delta_yesterday if temp_delta_yesterday is not None else 0.0
+        # Combined trend signal: blend yesterday's trend with today's early delta
+        # Weight: 60% yesterday's anomaly, 40% today's early delta (when available)
+        trend_signal = 0.6 * trend_dev + 0.4 * delta_yest
+        # Bound the adjustment to ±0.8°C to avoid over-correction on outliers
+        trend_adjustment = max(-0.8, min(0.8, 0.3 * trend_signal))
+        projected += trend_adjustment
 
     headroom = max(0.0, projected - current_max) * (1.0 - storm)  # storm caps the climb
     predicted_mean = current_max + headroom            # never below the running max

@@ -161,6 +161,63 @@ def _fetch_nea_forecast_today() -> dict | None:
         return None
 
 
+# REMOVED: _fetch_nea_forecast_today() — use _parse_nea_forecast() on the
+# already-fetched payload from ingestion instead of making a second API call.
+
+
+def _parse_nea_forecast(payload: dict | None) -> dict | None:
+    """Parse the twenty_four_hr_forecast payload (already fetched by ingestion)
+    into {high: float, low: float}. Identical logic to _fetch_nea_forecast_today
+    but works on the in-memory payload to avoid a duplicate API call."""
+    if not payload:
+        return None
+    records = payload.get("data", {}).get("records", [])
+    if not records:
+        return None
+
+    now_sgt = datetime.now(SGT)
+
+    def _valid_contains_today(rec):
+        vp = rec.get("general", {}).get("validPeriod", {})
+        try:
+            start = datetime.fromisoformat(vp.get("start", ""))
+            end = datetime.fromisoformat(vp.get("end", ""))
+            today_6am = now_sgt.replace(hour=6, minute=0, second=0, microsecond=0)
+            today_6pm = now_sgt.replace(hour=18, minute=0, second=0, microsecond=0)
+            return start <= today_6am and end >= today_6pm
+        except (TypeError, ValueError, AttributeError):
+            return False
+
+    best = None
+    for rec in sorted(records, key=lambda r: r.get("updatedTimestamp", ""), reverse=True):
+        if _valid_contains_today(rec):
+            best = rec
+            break
+    if best is None:
+        for rec in sorted(records, key=lambda r: r.get("updatedTimestamp", ""), reverse=True):
+            vp = rec.get("general", {}).get("validPeriod", {})
+            try:
+                start = datetime.fromisoformat(vp.get("start", ""))
+                end = datetime.fromisoformat(vp.get("end", ""))
+                if start <= now_sgt <= end:
+                    best = rec
+                    break
+            except (TypeError, ValueError, AttributeError):
+                continue
+    if best is None:
+        return None
+
+    temp = best.get("general", {}).get("temperature", {})
+    high = temp.get("high")
+    low = temp.get("low")
+    if high is None or low is None:
+        return None
+    high_f, low_f = float(high), float(low)
+    if high_f < 24.0 or high_f > 40.0 or low_f < 20.0 or low_f > 35.0:
+        return None
+    return {"high": high_f, "low": low_f}
+
+
 def extract_singapore_feature_vector(raw_data: dict, metar_history: list) -> dict:
     features = {}
 
@@ -357,7 +414,8 @@ def extract_singapore_feature_vector(raw_data: dict, metar_history: list) -> dic
     # 6. NEA 24-hour forecast: today's official expected max/min temperature.
     #     These are the meteorologists' own best estimate of the daily max,
     #     used by the model as an informed prior instead of a fixed climatology.
-    nea_fc = _fetch_nea_forecast_today()
+    #     Uses the already-fetched twenty_four_hr_forecast from ingestion (no second call).
+    nea_fc = _parse_nea_forecast(raw_data.get("twenty_four_hr_forecast"))
     if nea_fc is not None:
         features["nea_forecast_high"] = nea_fc["high"]
         features["nea_forecast_low"]  = nea_fc["low"]
