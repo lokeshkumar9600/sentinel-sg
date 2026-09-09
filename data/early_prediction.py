@@ -205,8 +205,12 @@ def analyze_early_prediction() -> dict:
     held_count = sum(1 for d in days if d.get("held") is True)
     days_with_lock = len(lock_on_hours)
 
+    # Only count days that actually had snapshot data as "analyzed" —
+    # days without timeseries snapshots are settled results, not analysis.
+    days_with_data = [d for d in days if d.get("total_snapshots", 0) > 0]
+
     summary = {
-        "days_analyzed": len(days),
+        "days_analyzed": len(days_with_data),
         "days_with_lock_on": days_with_lock,
         "avg_lock_on_hour": round(sum(lock_on_hours) / len(lock_on_hours), 1) if lock_on_hours else None,
         "earliest_lock_on_hour": min(lock_on_hours) if lock_on_hours else None,

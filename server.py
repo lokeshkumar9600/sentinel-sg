@@ -15,10 +15,13 @@ started on app startup.  /api/prices reads from its in-memory price map with
 zero latency — no TTL cache, no Gamma polling.
 """
 
+import logging
 import math
+import sys
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime
+from typing import Optional
 
 import numpy as np
 
@@ -30,9 +33,17 @@ def _f(v, default: float):
     except (TypeError, ValueError):
         return default
 
-from fastapi import Body, FastAPI
+from fastapi import Body, FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger("sentinel")
 
 from data.config import (
     BANKROLL_USD,
@@ -311,12 +322,42 @@ def _build_signal_state(features: dict, trades: list[dict]) -> dict:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Manage application startup and shutdown."""
+    # Startup
+    logger.info("Starting Sentinel Prediction Engine...")
+    logger.info("Initializing WebSocket feed...")
     feed.start()
+    logger.info("Server ready. Dashboard available at http://localhost:8000")
     yield
+    # Shutdown
+    logger.info("Shutting down Sentinel Prediction Engine...")
     feed.stop()
+    logger.info("WebSocket feed stopped.")
+    logger.info("Shutdown complete.")
 
 
 app = FastAPI(title="SG Max-Temp Dashboard", version="1.0.0", lifespan=lifespan)
+
+
+# --- Request logging middleware ---
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Log all API requests with timing information."""
+    start_time = time.time()
+    response = await call_next(request)
+    duration = time.time() - start_time
+
+    # Only log API endpoints, not static files
+    if request.url.path.startswith("/api/"):
+        logger.info(
+            "%s %s %d %.3fms",
+            request.method,
+            request.url.path,
+            response.status_code,
+            duration * 1000,
+        )
+
+    return response
 
 # ---------------------------------------------------------------------------
 # TTL cache for /api/dashboard only (full pipeline).  /api/prices is now
@@ -407,9 +448,12 @@ def _get_dashboard(fresh: bool = False) -> dict:
 
 @app.get("/api/health")
 def health():
+    """Enhanced health check with detailed status information."""
+    now = datetime.now(SGT)
     return {
         "status": "ok",
-        "server_time_sgt": datetime.now(SGT).strftime("%Y-%m-%d %H:%M:%S SGT"),
+        "server_time_sgt": now.strftime("%Y-%m-%d %H:%M:%S SGT"),
+        "version": "1.0.0",
         "poll_interval_s": POLL_INTERVAL_SECONDS,
         "dashboard_ttl_s": DASHBOARD_TTL_SECONDS,
         "ws_feed": {
@@ -420,6 +464,13 @@ def health():
                 if feed.last_move_at else None
             ),
             "event_date_str": feed.event_date_str,
+        },
+        "positions": {
+            "count": len(book),
+        },
+        "model": {
+            "last_prediction": _last_model.get("at"),
+            "age_seconds": round(time.time() - _last_model.get("at", 0)) if _last_model.get("at") else None,
         },
     }
 
@@ -721,6 +772,116 @@ def feed_stats():
     analytics page's latency panel every few seconds. No METAR dependency, so
     it stays instant even when the observation API is slow."""
     return JSONResponse(content={"feed_stats": _live_feed_stats()})
+
+
+@app.get("/api/export")
+def export_data(
+    format: str = "json",
+    include_predictions: bool = True,
+    include_trades: bool = True,
+    include_positions: bool = True,
+    limit: int = 1000,
+):
+    """Export historical data for external analysis.
+
+    Supports JSON format with configurable data inclusion.
+    Useful for spreadsheet analysis, ML training, or archival.
+    """
+    from datetime import datetime as _dt
+
+    export = {
+        "generated_at_sgt": _dt.now(SGT).strftime("%Y-%m-%d %H:%M:%S SGT"),
+        "format": format,
+    }
+
+    if include_predictions:
+        try:
+            from data.prediction_journal import get_journal
+            journal = get_journal()
+            export["predictions"] = journal[:limit] if journal else []
+        except Exception as e:
+            logger.warning("Failed to export predictions: %s", e)
+            export["predictions"] = []
+
+    if include_trades:
+        try:
+            from execution.trade_history import get_history
+            export["trades"] = get_history(limit)
+        except Exception as e:
+            logger.warning("Failed to export trades: %s", e)
+            export["trades"] = []
+
+    if include_positions:
+        try:
+            export["positions"] = book.snapshot()
+        except Exception as e:
+            logger.warning("Failed to export positions: %s", e)
+            export["positions"] = []
+
+    return JSONResponse(content=export)
+
+
+@app.get("/api/export/csv")
+def export_csv(
+    data_type: str = "trades",
+    limit: int = 1000,
+):
+    """Export data in CSV format for spreadsheet analysis.
+
+    Supported data_types: trades, predictions
+    """
+    from datetime import datetime as _dt
+    import csv
+    import io
+
+    if data_type == "trades":
+        try:
+            from execution.trade_history import get_history
+            records = get_history(limit)
+            if not records:
+                return JSONResponse(content={"error": "No trade data available"}, status_code=404)
+
+            output = io.StringIO()
+            writer = csv.DictWriter(output, fieldnames=records[0].keys())
+            writer.writeheader()
+            writer.writerows(records)
+
+            return JSONResponse(content={
+                "format": "csv",
+                "data_type": data_type,
+                "count": len(records),
+                "csv": output.getvalue(),
+            })
+        except Exception as e:
+            return JSONResponse(content={"error": str(e)}, status_code=500)
+
+    elif data_type == "predictions":
+        try:
+            from data.prediction_journal import get_journal
+            records = get_journal()
+            if not records:
+                return JSONResponse(content={"error": "No prediction data available"}, status_code=404)
+
+            records = records[:limit]
+            output = io.StringIO()
+            writer = csv.DictWriter(output, fieldnames=records[0].keys())
+            writer.writeheader()
+            writer.writerows(records)
+
+            return JSONResponse(content={
+                "format": "csv",
+                "data_type": data_type,
+                "count": len(records),
+                "csv": output.getvalue(),
+            })
+        except Exception as e:
+            return JSONResponse(content={"error": str(e)}, status_code=500)
+
+    else:
+        return JSONResponse(
+            content={"error": f"Unsupported data_type: {data_type}. Use 'trades' or 'predictions'."},
+            status_code=400,
+        )
 
 
 def _build_synthetic_features(p: dict) -> dict:

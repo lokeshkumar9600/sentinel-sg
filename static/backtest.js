@@ -65,7 +65,7 @@ function renderCurve(curve) {
 
   const xLabels = curve
     .filter((_, i) => i === 0 || i === curve.length - 1 || i % Math.max(1, Math.ceil(curve.length / 8)) === 0)
-    .map(c => `<text x="${xs(curve.indexOf(c)).toFixed(1)}" y="${H - 8}" text-anchor="middle" fill="var(--muted-ink)" font-size="9" font-family="var(--font-mono)">${escapeHtml(c.date.split('-')[0])}</text>`)
+    .map(c => `<text x="${xs(curve.indexOf(c)).toFixed(1)}" y="${H - 8}" text-anchor="middle" fill="var(--muted-ink)" font-size="9" font-family="var(--font-mono)">${escapeHtml(fmtShortDate(c.date))}</text>`)
     .join('');
 
   // start/end equity labels
@@ -107,9 +107,26 @@ function fmtDay(dateStr) {
   return (mi >= 0 ? months[mi] : m[1].slice(0, 3)) + ' ' + m[2] + ', ' + m[3];
 }
 
+const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+function fmtShortDate(dateStr) {
+  // "09-05" -> "Sep 5", or "September-05-2026" -> "Sep 5"
+  if (!dateStr) return '';
+  // Try MM-DD first
+  const md = String(dateStr).match(/^(\d{2})-(\d{2})/);
+  if (md) return MONTH_NAMES[parseInt(md[1], 10) - 1] + ' ' + parseInt(md[2], 10);
+  // Try "Month-DD-YYYY"
+  const full = String(dateStr).match(/([A-Za-z]+)-(\d+)-(\d{4})/);
+  if (full) {
+    const mi = MONTH_NAMES.indexOf(full[1].slice(0, 3));
+    return (mi >= 0 ? MONTH_NAMES[mi] : full[1].slice(0, 3)) + ' ' + parseInt(full[2], 10);
+  }
+  return dateStr;
+}
+
 function renderPerDay(rows) {
   if (!rows || !rows.length) {
-    els.dayBody.innerHTML = '<tr><td colspan="5" class="emptystate">No journal entries yet — the model records each day once it runs.</td></tr>';
+    els.dayBody.innerHTML = '<tr><td colspan="6" class="emptystate">No journal entries yet — the model records each day once it runs.</td></tr>';
     return;
   }
   els.dayBody.innerHTML = rows.map(r => {
@@ -125,12 +142,19 @@ function renderPerDay(rows) {
     const pb = r.p_bracket != null && isFinite(r.p_bracket)
       ? (r.p_bracket * 100).toFixed(1) + '%'
       : '<span class="text--muted">—</span>';
+    const ts = r.trade_status;
+    const tradeTag = ts === 'traded'
+      ? '<span class="tag tag--ENTER_YES" style="font-size:0.62rem">TRADED</span>'
+      : ts === 'no_trade'
+        ? '<span class="tag tag--SKIP" style="font-size:0.62rem">SKIPPED</span>'
+        : '<span class="text--muted">—</span>';
     return `<tr>
       <td>${fmtDay(r.date)}${r.hour_of_day != null ? ' <span class="text--muted" style="font-size:0.66rem">' + escapeHtml(r.hour_of_day) + ':00</span>' : ''}</td>
       <td class="num">${pred}</td>
       <td class="num">${actualStr}</td>
       <td class="num ${errCls}">${err}</td>
       <td class="num">${pb}</td>
+      <td style="text-align:center">${tradeTag}</td>
     </tr>`;
   }).join('');
 }

@@ -100,7 +100,7 @@ def _reconstruct_positions(history: list) -> tuple[list, list, int]:
     return closed, open_pos, unpaired_exits
 
 
-def _per_day_accuracy() -> list[dict]:
+def _per_day_accuracy(trade_dates: set[str] | None = None) -> list[dict]:
     """Per-day Prediction vs Actual from the prediction journal.
 
     Each day the model recorded (mu, sigma) and, once settled, the actual WSSS
@@ -108,6 +108,10 @@ def _per_day_accuracy() -> list[dict]:
     fell inside the temperature bucket it landed in — i.e. how much confidence
     the model had in the bracket that actually occurred. Unsettled days show
     '—' rather than NaN.
+
+    If trade_dates is provided, each row gets a 'trade_status' field:
+      'traded' — the model entered a position on this date
+      'no_trade' — the model saw the day but chose not to trade (all signals were SKIP/TIMING_HOLD)
     """
     rows = []
     for e in get_journal():  # newest first
@@ -130,7 +134,45 @@ def _per_day_accuracy() -> list[dict]:
             )
             row["error"] = round(actual - mu, 2)
         rows.append(row)
+
+    # Annotate trade status if caller provided trade dates
+    if trade_dates is not None:
+        for row in rows:
+            d = row["date"]
+            # Convert "September-05-2026" to a comparable format
+            date_key = _date_str_to_key(d)
+            row["trade_status"] = "traded" if date_key in trade_dates else "no_trade"
+
     return rows
+
+
+def _date_str_to_key(date_str: str) -> str:
+    """Convert any date format to 'YYYY-MM-DD'.
+
+    Handles:
+      'September-05-2026' (journal format) → '2026-09-05'
+      '2026-09-05' (raw timestamp format)  → '2026-09-05'
+      '2026-09-05 14:30:00 SGT'            → '2026-09-05'
+    """
+    if not date_str:
+        return ""
+    # Already YYYY-MM-DD (possibly with time suffix)
+    raw = date_str.strip()[:10]
+    if len(raw) == 10 and raw[4] == "-" and raw[7] == "-":
+        return raw
+    # Journal format: "September-05-2026"
+    parts = date_str.split("-")
+    if len(parts) == 3:
+        month_map = {
+            "January": "01", "February": "02", "March": "03", "April": "04",
+            "May": "05", "June": "06", "July": "07", "August": "08",
+            "September": "09", "October": "10", "November": "11", "December": "12",
+        }
+        mm = month_map.get(parts[0], "?")
+        dd = parts[1].zfill(2)
+        yyyy = parts[2]
+        return f"{yyyy}-{mm}-{dd}"
+    return date_str[:10]
 
 
 def run_backtest() -> dict:
@@ -204,14 +246,20 @@ def run_backtest() -> dict:
     gross_loss = -sum(t["pnl"] for t in closed_list if t["pnl"] < 0)
     total_pnl = sum(t["pnl"] for t in closed_list)
 
-    dates_traded = {t["date"] for t in trades}
+    # Collect dates that had actual trades (any signal, not just closed)
+    dates_with_signals = set()
+    for h in get_all_history():
+        sig = (h.get("signal") or "").upper()
+        if sig.startswith("ENTER_"):
+            dates_with_signals.add(_date_str_to_key((h.get("timestamp_sgt") or "")[:10]))
+
     return {
         "bankroll": BANKROLL,
         "assumption": "reconstructed from the live advisory trade history "
                       "(data/trade_history.json): actual fills and their recorded "
                       "stops / take-profits — no simulated pricing",
         "days_settled": len({t["date"] for t in closed_list}),
-        "days_tracked": len(dates_traded),
+        "days_tracked": len(dates_with_signals),
         "trades_taken": len(played),
         "open_positions": len(open_pos),
         "wins": wins,
@@ -226,5 +274,5 @@ def run_backtest() -> dict:
         "return_pct": round((equity - BANKROLL) / BANKROLL * 100.0, 2),
         "curve": curve,
         "trades": trades,
-        "per_day": _per_day_accuracy(),
+        "per_day": _per_day_accuracy(dates_with_signals),
     }

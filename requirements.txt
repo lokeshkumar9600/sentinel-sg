@@ -1,13 +1,18 @@
-pandas
+# Core numeric + ML
 numpy
 scipy
+
+# HTTP + WebSocket
 requests
-beautifulsoup4
-lxml
+websocket-client
+
+# API server
 fastapi
 uvicorn
-lightgbm
-scikit-learn
-pyarrow
-websocket-client
+
+# Utilities
 python-dotenv
+certifi
+
+# Testing
+pytest
